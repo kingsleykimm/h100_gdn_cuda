@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel", "cmake>=3.22"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gdn-cuda"
+version = "0.1.0"
+description = "High-performance GDN (Gated Delta Net) CUDA kernels optimized for NVIDIA H100 GPUs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Kingsley Kim"},
+]
+keywords = ["cuda", "deep-learning", "pytorch", "h100", "gdn", "kernels"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: C++",
+    "Programming Language :: CUDA",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "pip>=26.0.1",
+    "torch>=2.0.0",
+]
+
+[tool.uv.extra-build-dependencies]
+gdn-cuda = ["torch>=2.8.0"]
+
+[project.optional-dependencies]
+dev = [
+    "flash-linear-attention>=0.4.1",
+    "pre-commit>=4.5.1",
+    "pytest>=9.0.2",
+    "build>=1.0.0",
+    "twine>=4.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/kingsleykimm/h100_gdn_cuda"
+Repository = "https://github.com/kingsleykimm/h100_gdn_cuda"
+Issues = "https://github.com/kingsleykimm/h100_gdn_cuda/issues"
+
+[tool.setuptools]
+packages = []
+
+[tool.pytest.ini_options]
+testpaths = ["test/test_py"]
+python_files = ["test_*.py", "*_test.py"]

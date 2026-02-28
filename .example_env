@@ -1,0 +1,8 @@
+export JIT_CACHE_DIR="/localtmp/bjb3az/.h100_gdn_cuda/" # where you want all the JIT cu + cubin files to be stored
+export CUDA_HOME_PATH="/localtmp/cuda-12.9/" # where you have your CUDA installation
+export LIBRARY_ROOT_PATH="REPO_PATH/gdn_cuda" # where the gdn_cuda library is placed (its just the repo_path/gdn_cuda)
+export JIT_DEBUG=0 # set to 1 to print debug information from the JIT compiler
+export JIT_USE_NVRTC=1 # use NVRTC (only for CUDA 12.9+) much faster than nvcc jit, I would recommend using this if you can
+export KERNEL_DEBUG=0 # set to 1 to print debug information from the kernels
+export PYTHONPATH="REPO_PATH/build:${PYTHONPATH}" # where the python bindings are built
+export FLA_USE_CUDA_GRAPH=1 # use CUDA Graphs for the FLA API, this is much faster than the default

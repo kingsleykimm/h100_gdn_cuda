@@ -1,0 +1,27 @@
+.venv/
+.cache/
+
+.clangd
+build/
+build_*/
+.DS_Store
+.vscode/
+.idea/
+.pytest_cache/
+
+gdn_cuda/include/cute*
+gdn_cuda/include/cutlass*
+
+.env
+
+# Python packaging
+*.egg-info/
+dist/
+*.pyc
+*.pyo
+__pycache__/
+*.so
+*.o
+
+# PyPI
+.pypirc
