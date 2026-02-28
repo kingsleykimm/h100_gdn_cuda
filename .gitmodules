@@ -4,3 +4,4 @@
 [submodule "third-party/fmt"]
 	path = third-party/fmt
 	url = https://github.com/fmtlib/fmt.git
+	url = https://github.com/HazyResearch/ThunderKittens.git
