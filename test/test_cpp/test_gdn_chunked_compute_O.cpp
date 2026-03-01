@@ -343,10 +343,11 @@ bool test_padded_mode(const ComputeOTestShape& shape, const TestConfig& config) 
         std::optional<torch::Tensor> cu_seqlens_opt = std::nullopt;
         std::optional<torch::Tensor> chunk_indices_opt = std::nullopt;
         std::optional<torch::Tensor> cu_chunks_opt = std::nullopt;
+        std::optional<int> total_chunks = std::nullopt;
         std::optional<float> scale_opt = std::nullopt;
-        gdn_cuda::bf16_gdn_chunked_compute_O(Q, S, K, U, O_kernel, gate_mn_opt, scale_opt, "t",
-                                             stream, cu_seqlens_opt, chunk_indices_opt,
-                                             cu_chunks_opt, (uint32_t)shape.chunk_size);
+        gdn_cuda::bf16_gdn_chunked_compute_O(
+            Q, S, K, U, O_kernel, gate_mn_opt, scale_opt, "t", stream, cu_seqlens_opt,
+            chunk_indices_opt, cu_chunks_opt, total_chunks, (uint32_t)shape.chunk_size);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         std::cout << "Checking O:\n";
@@ -426,11 +427,11 @@ bool test_varlen_mode(const VarlenTestShape& shape, const TestConfig& config) {
         std::optional<torch::Tensor> cu_seqlens_opt = cu_seqlens_d;
         std::optional<torch::Tensor> chunk_indices_opt = chunk_indices_d;
         std::optional<torch::Tensor> cu_chunks_opt = cu_chunks_d;
-
+        std::optional<int> total_chunks_opt = total_chunks;
         std::optional<float> scale_opt = std::nullopt;
-        gdn_cuda::bf16_gdn_chunked_compute_O(Q, S, K, U, O_kernel, gate_mn_opt, scale_opt, "t",
-                                             stream, cu_seqlens_opt, chunk_indices_opt,
-                                             cu_chunks_opt, (uint32_t)shape.chunk_size);
+        gdn_cuda::bf16_gdn_chunked_compute_O(
+            Q, S, K, U, O_kernel, gate_mn_opt, scale_opt, "t", stream, cu_seqlens_opt,
+            chunk_indices_opt, cu_chunks_opt, total_chunks, (uint32_t)shape.chunk_size);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         std::cout << "Checking O:\n";

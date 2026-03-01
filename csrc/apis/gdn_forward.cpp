@@ -118,7 +118,7 @@ std::pair<at::Tensor, at::Tensor> chunked_forward(
 
     at::Tensor out = at::empty_like(value);
     api::bf16_gdn_chunked_compute_O(query, state, key, u, out, gate_mn_opt, scale, "t", stream,
-                                    cu_seqlens, chunk_indices, cu_chunks);
+                                    cu_seqlens, chunk_indices, cu_chunks, total_chunks);
 
     out = out.index({torch::indexing::Ellipsis, torch::indexing::Slice(0, head_dim)});
     auto final_state = final_state_storage.value();
@@ -259,9 +259,10 @@ void bf16_gdn_chunked_compute_O(at::Tensor& q, at::Tensor& state, at::Tensor& k,
                                 std::optional<float> scale, const std::string& compiled_dims,
                                 cudaStream_t stream, std::optional<at::Tensor>& cu_seqlens,
                                 std::optional<at::Tensor>& chunk_indices,
-                                std::optional<at::Tensor>& cu_chunks, uint32_t chunk_size) {
+                                std::optional<at::Tensor>& cu_chunks,
+                                std::optional<int> total_chunks, uint32_t chunk_size) {
     api::bf16_gdn_chunked_compute_O(q, state, k, u, o, gate, scale, compiled_dims, stream,
-                                    cu_seqlens, chunk_indices, cu_chunks, chunk_size);
+                                    cu_seqlens, chunk_indices, cu_chunks, total_chunks, chunk_size);
 }
 
 void chunk_local_cumsum_bf16(at::Tensor& input, at::Tensor& output, int batch_size, int seq_len,

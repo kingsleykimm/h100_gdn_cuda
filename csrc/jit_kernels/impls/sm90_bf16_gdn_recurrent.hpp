@@ -66,15 +66,29 @@ class SM90_BF16_GDN_Recurrent_Runtime : public LaunchRuntime<SM90_BF16_GDN_Recur
 
 using namespace gdn_cuda::kernels::sm90_gdn_recurrent_impl;
 
-static void __instantiate_kernel() {{
-    auto kernel_ptr = reinterpret_cast<void *>(&fused_recurrent_gated_delta_rule_bf16<
+using GdnRecurrentKernelPtr = decltype(&fused_recurrent_gated_delta_rule_bf16<
+    {}, {}, {}, {},
+    {}, {},
+    {}, {}, {},
+    {}, {}, {}, {}, {}, {}
+>);
+
+extern "C" __attribute__((used)) GdnRecurrentKernelPtr __gdn_recurrent_kernel_ref =
+    &fused_recurrent_gated_delta_rule_bf16<
         {}, {}, {}, {},
         {}, {},
         {}, {}, {},
         {}, {}, {}, {}, {}, {}
-    >);
-}}
+    >;
             )",
+            get_compiled_dim(args.compiled_dims, 'k', args.shape_k),
+            get_compiled_dim(args.compiled_dims, 'v', args.shape_v), args.num_v_heads,
+            args.num_k_heads, args.block_v, args.num_blocks, args.launch_config.num_multicast,
+            args.num_tma_threads, args.num_math_threads,
+            get_compiled_dim(args.compiled_dims, 't', args.seq_len),
+            args.is_var_len ? "true" : "false", args.is_initial_state ? "true" : "false",
+            args.store_step_state ? "true" : "false", args.is_qk_norm ? "true" : "false",
+            args.use_gate ? "true" : "false",
             get_compiled_dim(args.compiled_dims, 'k', args.shape_k),
             get_compiled_dim(args.compiled_dims, 'v', args.shape_v), args.num_v_heads,
             args.num_k_heads, args.block_v, args.num_blocks, args.launch_config.num_multicast,
@@ -116,7 +130,10 @@ inline void sm90_bf16_gdn_recurrent(
         // Variable length: tensors are (total_seq_len, num_heads, head_dim)
         HOST_ASSERT(q.dim() == 3 && k.dim() == 3 && v.dim() == 3,
                     "Variable length expects 3D tensors (total_seq, heads, dim)");
-        HOST_ASSERT(initial_state->dim() == 4, "State should be 4D (batch, heads, v_dim, k_dim)");
+        if (is_initial_state) {
+            HOST_ASSERT(initial_state->dim() == 4,
+                        "State should be 4D (batch, heads, v_dim, k_dim)");
+        }
 
         at::Tensor& cu_seqlens_tensor = cu_seqlens.value();
         HOST_ASSERT(cu_seqlens_tensor.dim() == 1, "cu_seqlens must be a 1D tensor");
@@ -214,8 +231,10 @@ inline void sm90_bf16_gdn_recurrent(
         // Fixed length: tensors are (batch, seq_len, num_heads, head_dim)
         HOST_ASSERT(q.dim() == 4 && k.dim() == 4 && v.dim() == 4,
                     "Fixed length expects 4D tensors (batch, seq, heads, dim)");
-        HOST_ASSERT(initial_state.has_value() && initial_state->dim() == 4,
-                    "State should be 4D (batch, heads, k_dim, v_dim)");
+        if (is_initial_state) {
+            HOST_ASSERT(initial_state->dim() == 4,
+                        "State should be 4D (batch, heads, k_dim, v_dim)");
+        }
 
         const uint32_t batch_size = static_cast<uint32_t>(q.size(0));
         const uint32_t seq_len = static_cast<uint32_t>(q.size(1));

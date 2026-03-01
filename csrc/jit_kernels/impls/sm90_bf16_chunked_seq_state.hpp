@@ -37,7 +37,7 @@ class SM90_BF16_GDN_State_Passing_Runtime : LaunchRuntime<SM90_BF16_GDN_State_Pa
     static std::string generate_impl(const Args& args) {
         const std::string code = fmt::format(
             R"(
-#include <gdn_cuda/kernels/sm90_bf16_chunked_seq_state_update.cuh>
+#include <gdn_cuda/kernels/sm90_bf16_chunked_seq_state_update2.cuh>
 
 static void __instantiate_kernel() {{
     auto kernel_ptr = reinterpret_cast<void *>(&sm90_bf16_chunked_seq_state_update<

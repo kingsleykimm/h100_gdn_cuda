@@ -88,8 +88,8 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _supports_gdn_dim(head_dim: int) -> bool:
-    return head_dim >= 64 and head_dim % 64 == 0
+# def _supports_gdn_dim(head_dim: int) -> bool:
+#     return head_dim >= 64 and head_dim % 64 == 0
 
 
 def _make_l2_normalized_key(shape: tuple[int, ...], device: torch.device, dtype: torch.dtype) -> torch.Tensor:
@@ -278,7 +278,6 @@ def _parse_args() -> argparse.Namespace:
                         help="If >0, only run the first N shapes per mode.")
     parser.add_argument("--csv", type=str, default="",
                         help="Optional CSV output path.")
-    parser.add_argument("--keep-unsupported-dims", action="store_true")
     parser.add_argument("--no-empty-cache", action="store_true")
     return parser.parse_args()
 
@@ -337,10 +336,6 @@ def main() -> None:
             B, T, H, D, _scale, gate_logit_normalizer, mask_p = shape
             shape_text = _fmt_padded_case(shape)
             case_id = shape_text
-            if args.backend in ("gdn_cuda", "both") and not _supports_gdn_dim(D) and not args.keep_unsupported_dims:
-                print(
-                    f"[skip] {case_id} not supported by gdn_cuda chunked_forward.")
-                continue
             torch.manual_seed(args.seed + idx)
             q = _make_l2_normalized_key((B, T, H, D), device, dtype)
             k = _make_l2_normalized_key((B, T, H, D), device, dtype)
@@ -435,10 +430,6 @@ def main() -> None:
             H, D, mask_p, cu_seqlens = shape
             shape_text = _fmt_varlen_case(shape)
             case_id = shape_text
-            if args.backend in ("gdn_cuda", "both") and not _supports_gdn_dim(D) and not args.keep_unsupported_dims:
-                print(
-                    f"[skip] {case_id} not supported by gdn_cuda chunked_forward.")
-                continue
             torch.manual_seed(args.seed + 10000 + idx)
             cu_seqlens_i32 = torch.tensor(
                 cu_seqlens, device=device, dtype=torch.int32)

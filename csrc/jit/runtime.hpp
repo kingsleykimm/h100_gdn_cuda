@@ -18,6 +18,10 @@ class KernelRuntime {
     KernelRuntime(const fs::path cached_dir) {
         HOST_ASSERT(!cuda_home.empty(), "");
         const fs::path cubin_path = cached_dir / "kernel.cubin";
+        const std::uintmax_t cubin_size = fs::exists(cubin_path) ? fs::file_size(cubin_path) : 0;
+        HOST_ASSERT(
+            cubin_size > 0,
+            fmt::format("kernel.cubin is missing or empty: {}", cubin_path.string()).c_str());
         const fs::path cuobjdump_path = cuda_home / "bin" / "cuobjdump";
         const std::vector<std::string> filters = {"vprintf", "__instantiate_kernel", "__internal",
                                                   "__assertfail"};
@@ -27,6 +31,7 @@ class KernelRuntime {
         if (exit_code != 0) {
             printf("Error in cuobjdump for file %s", cubin_path.string().c_str());
             printf("Exit code: %d", exit_code);
+            printf("cuobjdump output:\n%s\n", symbols.c_str());
             HOST_ASSERT(false, "");
         }
         std::istringstream stream(symbols);

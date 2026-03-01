@@ -156,6 +156,10 @@ class NVRTCCompiler final : public Compiler {
         int major, minor;
         NVRTC_CHECK(nvrtcVersion(&major, &minor));
         signature = fmt::format("NVRTC{}.{}", major, minor);
+
+        if (get_env<int>("JIT_DEBUG", 0)) {
+            printf("NVRTC version: %d.%d\n", major, minor);
+        }
         HOST_ASSERT((major > 12) || (major == 12 && minor >= 3),
                     "NVRTC version must be at least 12.3");
 

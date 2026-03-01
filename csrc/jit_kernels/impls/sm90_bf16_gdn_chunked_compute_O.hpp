@@ -111,7 +111,7 @@ inline void sm90_bf16_gdn_chunked_compute_O(
     std::optional<at::Tensor> &gate, std::optional<float> scale, const std::string &compiled_dims,
     cudaStream_t stream, std::optional<at::Tensor> &cu_seqlens,
     std::optional<at::Tensor> &chunk_indices, std::optional<at::Tensor> &cu_chunks,
-    const uint32_t chunk_size = 64) {
+    std::optional<int> total_chunks, const uint32_t chunk_size = 64) {
     bool is_var_len = cu_seqlens.has_value();
 
     if (is_var_len) {
@@ -137,20 +137,12 @@ inline void sm90_bf16_gdn_chunked_compute_O(
         HOST_ASSERT(cu_chunks->dim() == 1, "cu_chunks must be a 1D tensor");
         HOST_ASSERT(cu_chunks->size(0) > 0, "cu_chunks must be non-empty");
 
-        int total_chunks_host = 0;
-        CUDA_CHECK(cudaMemcpy(&total_chunks_host,
-                              cu_chunks->data_ptr<int>() + (cu_chunks->size(0) - 1), sizeof(int),
-                              cudaMemcpyDeviceToHost));
-        HOST_ASSERT(total_chunks_host > 0, "cu_chunks last value must be > 0");
-
         // Prepare chunk indices for varlen scheduling.
         // cu_chunks is cumulative; total chunks is its last element, not its length.
-        const uint32_t total_chunks = static_cast<uint32_t>(total_chunks_host);
-
         // Get kernel configuration from heuristics
         GDNConfig config =
             get_compute_O_config<true>(shape_k, shape_v, num_v_heads, num_k_heads, batch_size, 0,
-                                       total_chunks, gate.has_value(), chunk_size);
+                                       total_chunks.value(), gate.has_value(), chunk_size);
 
         const float scale_factor =
             scale.has_value() ? scale.value() : 1.0f / std::sqrt(static_cast<float>(shape_k));
@@ -176,8 +168,8 @@ inline void sm90_bf16_gdn_chunked_compute_O(
         // tiles For kernel: tma_copy<BLOCK_K, BLOCK_V, ...> with coords (k1*BLOCK_K,
         // v_block*BLOCK_V, 1, v_head, chunk_offset)
         CUtensorMap state_tensor_map = make_tma_4d_desc(
-            state, state.size(-1), state.size(-2), state.size(-3), total_chunks, state.stride(2),
-            state.stride(1), state.stride(0), config.block_k, config.block_v, 1, 1,
+            state, state.size(-1), state.size(-2), state.size(-3), total_chunks.value(),
+            state.stride(2), state.stride(1), state.stride(0), config.block_k, config.block_v, 1, 1,
             config.swizzle_state_mode, ti_align(config.block_k * 2, 64));
 
         // O tensor: (total_seq_len, num_v_heads, shape_v) -> store (block_v, chunk_size) tiles

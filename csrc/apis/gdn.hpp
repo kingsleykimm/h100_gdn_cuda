@@ -54,18 +54,17 @@ inline void bf16_chunked_seq_state_update(
     }
 }
 
-inline void bf16_gdn_chunked_compute_O(at::Tensor& q, at::Tensor& state, at::Tensor& k,
-                                       at::Tensor& u, at::Tensor& o,
-                                       std::optional<at::Tensor>& gate, std::optional<float> scale,
-                                       const std::string& compiled_dims, cudaStream_t stream,
-                                       std::optional<at::Tensor>& cu_seqlens,
-                                       std::optional<at::Tensor>& chunk_indices,
-                                       std::optional<at::Tensor>& cu_chunks,
-                                       const uint32_t chunk_size = 64) {
+inline void bf16_gdn_chunked_compute_O(
+    at::Tensor& q, at::Tensor& state, at::Tensor& k, at::Tensor& u, at::Tensor& o,
+    std::optional<at::Tensor>& gate, std::optional<float> scale, const std::string& compiled_dims,
+    cudaStream_t stream, std::optional<at::Tensor>& cu_seqlens,
+    std::optional<at::Tensor>& chunk_indices, std::optional<at::Tensor>& cu_chunks,
+    std::optional<int> total_chunks, const uint32_t chunk_size = 64) {
     int major = device_prop->get_major_minor().first;
     if (major == 9) {
         sm90_bf16_gdn_chunked_compute_O(q, state, k, u, o, gate, scale, compiled_dims, stream,
-                                        cu_seqlens, chunk_indices, cu_chunks, chunk_size);
+                                        cu_seqlens, chunk_indices, cu_chunks, total_chunks,
+                                        chunk_size);
     }
 }
 

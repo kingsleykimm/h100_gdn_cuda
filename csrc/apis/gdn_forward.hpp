@@ -62,7 +62,8 @@ void bf16_gdn_chunked_compute_O(at::Tensor& q, at::Tensor& state, at::Tensor& k,
                                 std::optional<float> scale, const std::string& compiled_dims,
                                 cudaStream_t stream, std::optional<at::Tensor>& cu_seqlens,
                                 std::optional<at::Tensor>& chunk_indices,
-                                std::optional<at::Tensor>& cu_chunks, uint32_t chunk_size = 64);
+                                std::optional<at::Tensor>& cu_chunks,
+                                std::optional<int> total_chunks, uint32_t chunk_size = 64);
 
 void chunk_local_cumsum_bf16(at::Tensor& input, at::Tensor& output, int batch_size, int seq_len,
                              int num_heads, bool head_first, std::optional<at::Tensor>& cu_seqlens,
