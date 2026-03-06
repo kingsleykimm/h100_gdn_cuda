@@ -258,7 +258,6 @@ void bf16_chunked_seq_state_update(
     HOST_ASSERT(head_dim > 0, "Head dimension must be greater than 0");
     int aligned_dim;
     if (head_dim % 64 != 0) {  // just align to 64 eleemnts for simplicity
-
         aligned_dim = ti_align(head_dim, 64);
         if (aligned_dim == 0) {
             aligned_dim = 64;
@@ -280,11 +279,23 @@ void bf16_chunked_seq_state_update(
             initial_state.emplace(
                 torch::pad(initial_state.value(), padding_initial_state, "constant", 0));
         }
+
+        std::vector<int64_t> padding_state(state.dim() * 2, 0);
+        padding_state[1] = padding;  // right side of dim = 0
+        padding_state[3] = padding;  // right side of dim = 1
+        state = torch::pad(state, padding_state, "constant", 0);
+
+        if (final_state.has_value()) {
+            std::vector<int64_t> padding_final_state(final_state->dim() * 2, 0);
+            padding_final_state[1] = padding;  // right side of dim = 0
+            padding_final_state[3] = padding;  // right side of dim = 1
+            final_state.emplace(
+                torch::pad(final_state.value(), padding_final_state, "constant", 0));
+        }
     } else {
         aligned_dim = head_dim;
     }
 
-    printf("aligned_dim: %d\n", aligned_dim);
     api::bf16_chunked_seq_state_update(k, u, w, initial_state, state, final_state, gate,
                                        compiled_dims, stream, cu_seqlens, cu_chunks, total_chunks,
                                        chunk_size);
