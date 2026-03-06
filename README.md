@@ -9,6 +9,8 @@ H100 CUDA Kernels for Gated Delta Net
 - GCC 14+
 - CMAKE 3.10+
 - Python 3.10+
+- Cutlass 4.2.0
+- fmt
 ## Build
 
 `cmake -S . -B build` only configures/generates build files. It does not compile.
