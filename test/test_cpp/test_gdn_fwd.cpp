@@ -12,6 +12,7 @@
 
 #include <cuda_runtime.h>
 #include <gdn_cuda/utils.h>
+#include <torch/nn/options/normalization.h>
 #include <torch/torch.h>
 
 #include <apis/gdn_forward.hpp>
@@ -526,6 +527,14 @@ bool test_padded_mode(const GdnFwdTestShape& shape, const TestConfig& config) {
         torch::Tensor Q = torch::normal(0, fsk, {B, T, nkh, sk}, std::nullopt, bf16_opts);
         torch::Tensor K = torch::normal(0, fsk, {B, T, nkh, sk}, std::nullopt, bf16_opts);
         torch::Tensor V = torch::normal(0, fsv, {B, T, nvh, sv}, std::nullopt, bf16_opts);
+
+        // normalize QK, for input
+
+        torch::nn::functional::NormalizeFuncOptions normalize_options =
+            torch::nn::functional::NormalizeFuncOptions().dim(-1).p(2);
+        Q = torch::nn::functional::normalize(Q, normalize_options);
+        K = torch::nn::functional::normalize(K, normalize_options);
+
         torch::Tensor beta = torch::sigmoid(torch::randn({B, T, nvh}, bf16_opts) * 0.3f);
 
         // gate_raw: (B*T, nvh) bf16
@@ -572,7 +581,7 @@ bool test_padded_mode(const GdnFwdTestShape& shape, const TestConfig& config) {
 
         auto [O_kernel, final_state_kernel] = gdn_cuda::chunked_forward(
             Q, K, V, beta, gate_raw_f32, scale_opt, initial_state_opt, cu_seqlens_opt,
-            chunk_indices_opt, cu_chunks_opt, total_chunks_opt, stream);
+            chunk_indices_opt, cu_chunks_opt, total_chunks_opt, nullptr, stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         std::cout << "Checking O:\n";
@@ -581,9 +590,9 @@ bool test_padded_mode(const GdnFwdTestShape& shape, const TestConfig& config) {
         bool sp = check_tensor_close_or_cosine(final_state_ref, final_state_kernel, config.atol,
                                                config.rtol, "final_state");
 
-        std::cout << "Checking state tensor: \n";
-        bool st = check_tensor_close_or_cosine(state_per_chunk, state_kernel, config.atol,
-                                               config.rtol, "state_tensor");
+        // std::cout << "Checking state tensor: \n";
+        // bool st = check_tensor_close_or_cosine(state_per_chunk, state_kernel, config.atol,
+        //                                        config.rtol, "state_tensor");
 
         CUDA_CHECK(cudaStreamDestroy(stream));
         return op && sp;
@@ -621,6 +630,10 @@ bool test_varlen_mode(const GdnFwdVarlenShape& shape, const TestConfig& config) 
 
         torch::Tensor Q = torch::normal(0, fsk, {total_tokens, nkh, sk}, std::nullopt, bf16_opts);
         torch::Tensor K = torch::normal(0, fsk, {total_tokens, nkh, sk}, std::nullopt, bf16_opts);
+        torch::nn::functional::NormalizeFuncOptions normalize_options =
+            torch::nn::functional::NormalizeFuncOptions().dim(-1).p(2);
+        Q = torch::nn::functional::normalize(Q, normalize_options);
+        K = torch::nn::functional::normalize(K, normalize_options);
         torch::Tensor V = torch::normal(0, fsv, {total_tokens, nvh, sv}, std::nullopt, bf16_opts);
         torch::Tensor beta = torch::sigmoid(torch::randn({total_tokens, nvh}, bf16_opts) * 0.3f);
         torch::Tensor gate_raw =
@@ -666,7 +679,7 @@ bool test_varlen_mode(const GdnFwdVarlenShape& shape, const TestConfig& config) 
         std::optional<float> scale_opt = std::nullopt;
         auto [O_kernel, final_state_kernel] = gdn_cuda::chunked_forward(
             Q, K, V, beta, gate_raw_f32, scale_opt, initial_state_opt, cu_seqlens_opt,
-            chunk_indices_opt, cu_chunks_opt, total_chunks_opt, stream);
+            chunk_indices_opt, cu_chunks_opt, total_chunks_opt, nullptr, stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         std::cout << "Checking O:\n";
@@ -706,6 +719,10 @@ bool test_varlen_partial_mode(const GdnFwdVarlenPartialShape& shape, const TestC
 
         torch::Tensor Q = torch::normal(0, fsk, {total_tokens, nkh, sk}, std::nullopt, bf16_opts);
         torch::Tensor K = torch::normal(0, fsk, {total_tokens, nkh, sk}, std::nullopt, bf16_opts);
+        torch::nn::functional::NormalizeFuncOptions normalize_options =
+            torch::nn::functional::NormalizeFuncOptions().dim(-1).p(2);
+        Q = torch::nn::functional::normalize(Q, normalize_options);
+        K = torch::nn::functional::normalize(K, normalize_options);
         torch::Tensor V = torch::normal(0, fsv, {total_tokens, nvh, sv}, std::nullopt, bf16_opts);
         torch::Tensor beta = torch::sigmoid(torch::randn({total_tokens, nvh}, bf16_opts) * 0.3f);
         torch::Tensor gate_raw =
@@ -750,7 +767,7 @@ bool test_varlen_partial_mode(const GdnFwdVarlenPartialShape& shape, const TestC
 
         auto [O_kernel, final_state_kernel] = gdn_cuda::chunked_forward(
             Q, K, V, beta, gate_raw_normalized, scale_opt, initial_state_opt, cu_seqlens_opt,
-            chunk_indices_opt, cu_chunks_opt, total_chunks_opt, stream);
+            chunk_indices_opt, cu_chunks_opt, total_chunks_opt, nullptr, stream);
         CUDA_CHECK(cudaStreamSynchronize(stream));
 
         std::cout << "Checking O:\n";

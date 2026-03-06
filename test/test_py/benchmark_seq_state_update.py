@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +29,6 @@ _VARLEN_SHAPES_FROM_FLA = [
     (4, 60, 0.0, [0, 8192]),
 ]
 
-# Higher-batch additions to study batch scaling behavior.
 _PADDED_HIGH_BATCH_SHAPES = [
     (8, 512, 8, 64, 1.0, 1.0, 0.0),
     (16, 512, 8, 64, 1.0, 1.0, 0.0),
@@ -88,10 +86,6 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-# def _supports_gdn_dim(head_dim: int) -> bool:
-#     return head_dim >= 64 and head_dim % 64 == 0
-
-
 def _make_l2_normalized_key(shape: tuple[int, ...], device: torch.device, dtype: torch.dtype) -> torch.Tensor:
     k_f32 = torch.randn(*shape, device=device, dtype=torch.float32)
     return F.normalize(k_f32.clone(), p=2, dim=-1).to(dtype)
@@ -116,6 +110,26 @@ def _prepare_varlen_indices(cu_seqlens: torch.Tensor, chunk_size: int) -> tuple[
     )
 
 
+def _chunk_local_cumsum_padded(gate: torch.Tensor, chunk_size: int) -> torch.Tensor:
+    out = torch.empty_like(gate, dtype=torch.float32)
+    seq_len = gate.size(1)
+    for start in range(0, seq_len, chunk_size):
+        end = min(start + chunk_size, seq_len)
+        out[:, start:end, :] = torch.cumsum(gate[:, start:end, :], dim=1)
+    return out
+
+
+def _chunk_local_cumsum_varlen(gate: torch.Tensor, cu_seqlens: torch.Tensor, chunk_size: int) -> torch.Tensor:
+    out = torch.empty_like(gate, dtype=torch.float32)
+    host = cu_seqlens.cpu().tolist()
+    for b in range(len(host) - 1):
+        seq_start, seq_end = host[b], host[b + 1]
+        for start in range(seq_start, seq_end, chunk_size):
+            end = min(start + chunk_size, seq_end)
+            out[start:end, :] = torch.cumsum(gate[start:end, :], dim=0)
+    return out
+
+
 def _time_cuda_callable(
     fn: Callable[[], object], warmup: int, iters: int, use_cuda_graph: bool
 ) -> tuple[float, float, float, float]:
@@ -134,7 +148,6 @@ def _time_cuda_callable(
                 captured_out = fn()
         torch.cuda.synchronize()
 
-        # Keep captured outputs alive for the whole replay timing window.
         _ = captured_out
         replay = graph.replay
 
@@ -263,7 +276,7 @@ def _write_csv(path: str, results: list[BenchmarkResult]) -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Benchmark FLA vs gdn_cuda chunked_forward latency.")
+        description="Benchmark FLA vs gdn_cuda seq_state_update latency.")
     parser.add_argument(
         "--backend", choices=["fla", "gdn_cuda", "both"], default="both")
     parser.add_argument(
@@ -272,7 +285,7 @@ def _parse_args() -> argparse.Namespace:
         "--suite", choices=["base", "high_batch", "all"], default="all")
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iters", type=int, default=100)
-    parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--seed", type=int, default=4040)
     parser.add_argument("--chunk-size", type=int, default=64)
     parser.add_argument("--max-cases", type=int, default=0,
                         help="If >0, only run the first N shapes per mode.")
@@ -288,20 +301,23 @@ def main() -> None:
         raise ValueError("--warmup must be >= 0")
     if args.iters <= 0:
         raise ValueError("--iters must be > 0")
+    if args.chunk_size <= 0:
+        raise ValueError("--chunk-size must be > 0")
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for this benchmark.")
     if torch.cuda.get_device_capability(0)[0] < 9:
         raise RuntimeError(
             "SM90+ GPU is required for gdn_cuda benchmark targets.")
+
     device = torch.device("cuda")
     dtype = torch.bfloat16
     use_cuda_graph = _env_flag("FLA_USE_CUDA_GRAPH", default=False)
 
-    chunk_gated_delta_rule = None
+    chunk_gated_delta_rule_fwd_h = None
     if args.backend in ("fla", "both"):
-        from fla.ops.gated_delta_rule import chunk_gated_delta_rule as _chunk_gated_delta_rule
+        from fla.ops.common.chunk_delta_h import chunk_gated_delta_rule_fwd_h as _chunk_gated_delta_rule_fwd_h
 
-        chunk_gated_delta_rule = _chunk_gated_delta_rule
+        chunk_gated_delta_rule_fwd_h = _chunk_gated_delta_rule_fwd_h
 
     gdn_cuda = None
     if args.backend in ("gdn_cuda", "both"):
@@ -318,7 +334,7 @@ def main() -> None:
     print("Timing method: CUDA events + warmup + synchronize.")
     print(
         f"CUDA graph replay: {'enabled' if use_cuda_graph else 'disabled'} (FLA_USE_CUDA_GRAPH)")
-    print("For stable cross-run comparisons on NVIDIA GPUs, lock GPU clocks with nvidia-smi.")
+    print("Benchmark target: seq_state_update component only.")
 
     results: list[BenchmarkResult] = []
 
@@ -331,36 +347,40 @@ def main() -> None:
         selected_varlen = selected_varlen[: args.max_cases]
 
     if run_padded:
-        print(f"\nRunning padded benchmarks: {len(selected_padded)} cases")
+        print(
+            f"\nRunning padded seq_state_update benchmarks: {len(selected_padded)} cases")
         for idx, shape in enumerate(selected_padded):
             B, T, H, D, _scale, gate_logit_normalizer, mask_p = shape
             shape_text = _fmt_padded_case(shape)
             case_id = shape_text
+
             torch.manual_seed(args.seed + idx)
-            q = _make_l2_normalized_key((B, T, H, D), device, dtype)
+            num_chunks = (T + args.chunk_size - 1) // args.chunk_size
+
             k = _make_l2_normalized_key((B, T, H, D), device, dtype)
-            v = torch.randn(B, T, H, D, device=device, dtype=dtype)
-            beta = torch.sigmoid(torch.randn(
-                B, T, H, device=device, dtype=torch.float32)).to(dtype)
+            u_base = torch.randn(B, T, H, D, device=device, dtype=dtype) * 0.1
+            w = torch.randn(B, T, H, D, device=device, dtype=dtype) * 0.1
+
             gate = F.logsigmoid(torch.rand(
                 B, T, H, device=device, dtype=torch.float32))
             gate = gate / gate_logit_normalizer
             gate = gate * (torch.rand_like(gate) > mask_p)
-            scale = 1.0 / math.sqrt(D)
+            gate_cumsum = _chunk_local_cumsum_padded(gate, args.chunk_size)
+
+            initial_state_fla = torch.zeros(
+                B, H, D, D, device=device, dtype=dtype)
 
             if args.backend in ("fla", "both"):
-                assert chunk_gated_delta_rule is not None
+                assert chunk_gated_delta_rule_fwd_h is not None
 
                 def _run_fla_padded() -> object:
-                    return chunk_gated_delta_rule(
-                        q=q,
+                    return chunk_gated_delta_rule_fwd_h(
                         k=k,
-                        v=v,
-                        beta=beta,
-                        g=gate,
-                        scale=scale,
+                        w=w,
+                        u=u_base,
+                        g=gate_cumsum,
+                        initial_state=initial_state_fla,
                         output_final_state=True,
-                        use_qk_l2norm_in_kernel=False,
                     )
 
                 median_ms, p95_ms, min_ms, max_ms = _time_cuda_callable(
@@ -385,22 +405,31 @@ def main() -> None:
 
             if args.backend in ("gdn_cuda", "both"):
                 assert gdn_cuda is not None
-                ws_padded = gdn_cuda.ChunkedForwardWorkspace()
+
+                u_kernel = u_base.clone()
+                state_kernel = torch.empty(
+                    B, num_chunks, H, D, D, device=device, dtype=dtype)
+                final_state_kernel = torch.empty(
+                    B, H, D, D, device=device, dtype=dtype)
+                initial_state_gdn = initial_state_fla.transpose(
+                    -1, -2).contiguous().clone()
+                gate_mn = gdn_cuda.transpose_to_mn_major(
+                    gate_cumsum.clone(), 128)
 
                 def _run_gdn_padded() -> object:
-                    return gdn_cuda.chunked_forward(
-                        q,
+                    return gdn_cuda.bf16_chunked_seq_state_update(
                         k,
-                        v,
-                        beta,
-                        gate,
-                        scale,
+                        u_kernel,
+                        w,
+                        initial_state_gdn,
+                        state_kernel,
+                        final_state_kernel,
+                        gate_mn,
+                        "t",
                         None,
                         None,
                         None,
-                        None,
-                        None,
-                        workspace=ws_padded,
+                        args.chunk_size,
                     )
 
                 median_ms, p95_ms, min_ms, max_ms = _time_cuda_callable(
@@ -427,49 +456,54 @@ def main() -> None:
                 torch.cuda.empty_cache()
 
     if run_varlen:
-        print(f"\nRunning varlen benchmarks: {len(selected_varlen)} cases")
+        print(
+            f"\nRunning varlen seq_state_update benchmarks: {len(selected_varlen)} cases")
         for idx, shape in enumerate(selected_varlen):
             H, D, mask_p, cu_seqlens = shape
             shape_text = _fmt_varlen_case(shape)
             case_id = shape_text
+
             torch.manual_seed(args.seed + 10000 + idx)
             cu_seqlens_i32 = torch.tensor(
                 cu_seqlens, device=device, dtype=torch.int32)
-            total_tokens = int(cu_seqlens_i32[-1].item())
             cu_seqlens_i64 = cu_seqlens_i32.to(torch.int64)
-            chunk_indices, cu_chunks = _prepare_varlen_indices(
+            total_tokens = int(cu_seqlens_i32[-1].item())
+            _chunk_indices, cu_chunks = _prepare_varlen_indices(
                 cu_seqlens_i32, args.chunk_size)
             total_chunks = int(cu_chunks[-1].item())
+            n_seq = len(cu_seqlens) - 1
 
-            q = _make_l2_normalized_key((total_tokens, H, D), device, dtype)
             k = _make_l2_normalized_key((total_tokens, H, D), device, dtype)
-            v = torch.randn(total_tokens, H, D, device=device, dtype=dtype)
-            beta = torch.sigmoid(torch.randn(
-                total_tokens, H, device=device, dtype=torch.float32)).to(dtype)
+            u_base = torch.randn(total_tokens, H, D,
+                                 device=device, dtype=dtype) * 0.1
+            w = torch.randn(total_tokens, H, D,
+                            device=device, dtype=dtype) * 0.1
+
             gate = F.logsigmoid(torch.rand(
                 total_tokens, H, device=device, dtype=torch.float32))
             gate = gate * (torch.rand_like(gate) > mask_p)
-            scale = 1.0 / math.sqrt(D)
+            gate_cumsum = _chunk_local_cumsum_varlen(
+                gate, cu_seqlens_i32, args.chunk_size)
 
-            q_fla = q.unsqueeze(0)
-            k_fla = k.unsqueeze(0)
-            v_fla = v.unsqueeze(0)
-            beta_fla = beta.unsqueeze(0)
-            gate_fla = gate.unsqueeze(0)
+            initial_state_fla = torch.zeros(
+                n_seq, H, D, D, device=device, dtype=dtype)
 
             if args.backend in ("fla", "both"):
-                assert chunk_gated_delta_rule is not None
+                assert chunk_gated_delta_rule_fwd_h is not None
+
+                k_fla = k.unsqueeze(0)
+                u_fla = u_base.unsqueeze(0)
+                w_fla = w.unsqueeze(0)
+                g_fla = gate_cumsum.unsqueeze(0)
 
                 def _run_fla_varlen() -> object:
-                    return chunk_gated_delta_rule(
-                        q=q_fla,
+                    return chunk_gated_delta_rule_fwd_h(
                         k=k_fla,
-                        v=v_fla,
-                        beta=beta_fla,
-                        g=gate_fla,
-                        scale=scale,
+                        w=w_fla,
+                        u=u_fla,
+                        g=g_fla,
+                        initial_state=initial_state_fla,
                         output_final_state=True,
-                        use_qk_l2norm_in_kernel=False,
                         cu_seqlens=cu_seqlens_i64,
                     )
 
@@ -495,22 +529,31 @@ def main() -> None:
 
             if args.backend in ("gdn_cuda", "both"):
                 assert gdn_cuda is not None
-                ws_varlen = gdn_cuda.ChunkedForwardWorkspace()
+
+                u_kernel = u_base.clone()
+                state_kernel = torch.empty(
+                    total_chunks, H, D, D, device=device, dtype=dtype)
+                final_state_kernel = torch.empty(
+                    n_seq, H, D, D, device=device, dtype=dtype)
+                initial_state_gdn = initial_state_fla.transpose(
+                    -1, -2).contiguous().clone()
+                gate_mn = gdn_cuda.transpose_to_mn_major(
+                    gate_cumsum.clone(), 128)
 
                 def _run_gdn_varlen() -> object:
-                    return gdn_cuda.chunked_forward(
-                        q,
+                    return gdn_cuda.bf16_chunked_seq_state_update(
                         k,
-                        v,
-                        beta,
-                        gate,
-                        scale,
-                        None,
+                        u_kernel,
+                        w,
+                        initial_state_gdn,
+                        state_kernel,
+                        final_state_kernel,
+                        gate_mn,
+                        "t",
                         cu_seqlens_i32,
-                        chunk_indices,
                         cu_chunks,
                         total_chunks,
-                        workspace=ws_varlen,
+                        args.chunk_size,
                     )
 
                 median_ms, p95_ms, min_ms, max_ms = _time_cuda_callable(

@@ -178,6 +178,7 @@ target_link_libraries(gdn_cuda_lib PUBLIC
     ${TORCH_LIBRARIES}
     CUDA::cudart
     CUDA::cuda_driver
+    CUDA::nvrtc
     fmt::fmt
 )
 target_compile_definitions(gdn_cuda_lib PUBLIC

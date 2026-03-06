@@ -41,6 +41,20 @@ Notes:
 )");
 
     // =========================================================================
+    // ChunkedForwardWorkspace class
+    // =========================================================================
+
+    py::class_<gdn_cuda::ChunkedForwardWorkspace>(
+        m, "ChunkedForwardWorkspace",
+        R"(Pre-allocated workspace for chunked_forward to eliminate per-call cudaMalloc overhead.
+
+Create once and pass on every call.  Tensors are lazily allocated on the first
+call and reused on subsequent calls when the input shapes match.  When shapes
+change the workspace automatically reallocates.
+)")
+        .def(py::init<>());
+
+    // =========================================================================
     // High-level forward passes
     // =========================================================================
 
@@ -49,15 +63,22 @@ Notes:
         [](at::Tensor& q, at::Tensor& k, at::Tensor& v, at::Tensor& beta, at::Tensor& gate,
            std::optional<float> scale, std::optional<at::Tensor> initial_state,
            std::optional<at::Tensor> cu_seqlens, std::optional<at::Tensor> chunk_indices,
-           std::optional<at::Tensor> cu_chunks, std::optional<int> total_chunks) {
+           std::optional<at::Tensor> cu_chunks, std::optional<int> total_chunks,
+           py::object workspace_py) {
             cudaStream_t stream = current_stream();
+            gdn_cuda::ChunkedForwardWorkspace* ws_ptr = nullptr;
+            if (!workspace_py.is_none()) {
+                ws_ptr = workspace_py.cast<gdn_cuda::ChunkedForwardWorkspace*>();
+            }
             return gdn_cuda::chunked_forward(q, k, v, beta, gate, scale, initial_state, cu_seqlens,
-                                             chunk_indices, cu_chunks, total_chunks, stream);
+                                             chunk_indices, cu_chunks, total_chunks, ws_ptr,
+                                             stream);
         },
         py::arg("query"), py::arg("key"), py::arg("value"), py::arg("beta"), py::arg("gate"),
         py::arg("scale") = py::none(), py::arg("initial_state") = py::none(),
         py::arg("cu_seqlens") = py::none(), py::arg("chunk_indices") = py::none(),
         py::arg("cu_chunks") = py::none(), py::arg("total_chunks") = py::none(),
+        py::arg("workspace") = py::none(),
         R"(Chunked prefill forward pass.
 
 Args:
@@ -66,10 +87,14 @@ Args:
     value: Value tensor.
     beta: Beta tensor.
     gate: Gate tensor (pre-cumsum).
-    state: Optional initial state tensor.
+    initial_state: Optional initial state tensor.
     cu_seqlens: Optional varlen cumulative sequence offsets.
     chunk_indices: Optional varlen flat pairs [batch_idx, chunk_idx, ...].
     cu_chunks: Optional varlen cumulative chunk counts.
+    total_chunks: Optional total number of chunks.
+    workspace: Optional ChunkedForwardWorkspace for buffer reuse across calls.
+               When provided, intermediate tensors are allocated once and reused
+               on subsequent calls with the same shapes, eliminating cudaMalloc overhead.
 
 Shapes:
     padded:
@@ -101,23 +126,25 @@ Raises:
     RuntimeError/host assertion on invalid ranks, dtypes, or missing required varlen tensors.
 
 Notes:
-    Uses the current CUDA stream. Current implementation includes explicit synchronizations.
+    Uses the current CUDA stream.
 )");
 
     m.def(
         "recurrent_forward",
         [](at::Tensor& q, at::Tensor& k, at::Tensor& v, std::optional<at::Tensor> initial_state,
            at::Tensor& beta, at::Tensor& gate, std::optional<at::Tensor> cu_seqlens,
-           std::optional<at::Tensor> num_accepted_tokens, int inference_mode, bool is_qk_norm) {
+           std::optional<at::Tensor> num_accepted_tokens, int inference_mode, bool is_qk_norm,
+           std::optional<float> scale) {
             cudaStream_t stream = current_stream();
             gdn_cuda::InferenceMode mode = static_cast<gdn_cuda::InferenceMode>(inference_mode);
             return gdn_cuda::recurrent_forward(q, k, v, initial_state, beta, gate, cu_seqlens,
-                                               num_accepted_tokens, mode, stream, is_qk_norm);
+                                               num_accepted_tokens, mode, stream, is_qk_norm,
+                                               scale);
         },
         py::arg("query"), py::arg("key"), py::arg("value"), py::arg("initial_state") = py::none(),
         py::arg("beta"), py::arg("gate"), py::arg("cu_seqlens") = py::none(),
         py::arg("num_accepted_tokens") = py::none(), py::arg("inference_mode") = 0,
-        py::arg("is_qk_norm") = false,
+        py::arg("is_qk_norm") = false, py::arg("scale") = py::none(),
         R"(Recurrent decode/spec-verify forward pass.
 
 Args:
@@ -131,6 +158,7 @@ Args:
     num_accepted_tokens: Optional accepted token counts for speculative decode modes.
     inference_mode: Integer enum value from InferenceMode.
     is_qk_norm: Whether to enable QK normalization path.
+    scale: Optional output scale factor. If None, defaults to 1/sqrt(head_dim).
 
 Shapes:
     padded:

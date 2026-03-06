@@ -149,7 +149,8 @@ def _init_runtime() -> None:
     library_root_path = os.getenv("LIBRARY_ROOT_PATH")
     assert library_root_path is not None, "LIBRARY_ROOT_PATH must be set"
     cuda_home = os.getenv("CUDA_HOME_PATH") or os.getenv(
-        "CUDA_HOME") or "/usr/local/cuda"
+        "CUDA_HOME")
+    print(f"CUDA_HOME: {cuda_home}")
     gdn_cuda.init(library_root_path, cuda_home)
 
 
@@ -205,7 +206,7 @@ def test_chunked_forward_padded_vs_fla(
 
     out, final_state = gdn_cuda.chunked_forward(
         q.clone(), k.clone(), v.clone(), beta.clone(), gate.clone(), 1.0 /
-        math.sqrt(D), None, None, None, None
+        math.sqrt(D), None, None, None, None, None, workspace=None
     )
 
     out = out[..., :D]
@@ -280,6 +281,7 @@ def test_chunked_forward_varlen_vs_fla(
         chunk_indices.clone(),
         cu_chunks.clone(),
         chunk_indices.size(0) // 2,
+        workspace=None,
     )
 
     out = out[..., :D]

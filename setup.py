@@ -25,13 +25,14 @@ class CMakeBuild(build_ext):
 
         # Detect CUDA
         cuda_home = os.environ.get("CUDA_HOME") or os.environ.get(
-            "CUDA_HOME_PATH") or "/usr/local/cuda"
+            "CUDA_HOME_PATH")
 
         cmake_args = [
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={build_temp}",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             f"-DPYTHON_EXECUTABLE={sys.executable}",
             f"-DCUDA_TOOLKIT_ROOT_DIR={cuda_home}",
+            f"-DCUDAToolkit_ROOT={cuda_home}",
             "-DBUILD_PYBIND=ON",
             "-DBUILD_TESTS=OFF",
             "-DFETCH_LIBTORCH=OFF",

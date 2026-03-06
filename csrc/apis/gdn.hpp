@@ -29,12 +29,12 @@ inline void bf16_gdn_recurrent(at::Tensor& q, at::Tensor& k, at::Tensor& v,
                                const std::string& compiled_dims, cudaStream_t stream,
                                std::optional<at::Tensor>& cu_seqlens,
                                std::optional<at::Tensor>& num_accepted_tokens,
-                               bool store_step_state, bool is_qk_norm) {
+                               bool store_step_state, bool is_qk_norm, float scale = 1.0f) {
     int major = device_prop->get_major_minor().first;
     if (major == 9) {
         sm90_bf16_gdn_recurrent(q, k, v, initial_state, final_state, out, gate, beta, compiled_dims,
                                 stream, cu_seqlens, num_accepted_tokens, store_step_state,
-                                is_qk_norm);
+                                is_qk_norm, scale);
     }
 }
 

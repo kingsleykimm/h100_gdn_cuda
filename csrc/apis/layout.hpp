@@ -56,5 +56,30 @@ inline at::Tensor transpose_to_mn_major(at::Tensor& input, cudaStream_t stream,
     return out_storage;
 }
 
+// Transpose into a pre-allocated output tensor (no allocation).
+// The output tensor must already have the correct shape/strides from a prior
+// call to transpose_to_mn_major with the same input shape and alignment.
+inline void transpose_to_mn_major_into(at::Tensor& input, at::Tensor& output, cudaStream_t stream,
+                                       uint32_t alignment = 16) {
+    HOST_ASSERT(input.dim() >= 2, "Input must have at least two dimensions");
+    const int64_t mn = input.size(-2);
+    const int64_t k = input.size(-1);
+    size_t num_groups = 1;
+    for (int64_t i = 0; i < input.dim() - 2; i++) {
+        num_groups *= static_cast<size_t>(input.size(i));
+    }
+
+    if (input.scalar_type() == at::kFloat) {
+        sm90_transpose_fp32(input.data_ptr<float>(), output.data_ptr<float>(), mn, k, num_groups,
+                            alignment, stream);
+    } else if (input.scalar_type() == at::kBFloat16) {
+        sm90_transpose_bf16(reinterpret_cast<__nv_bfloat16*>(input.data_ptr<at::BFloat16>()),
+                            reinterpret_cast<__nv_bfloat16*>(output.data_ptr<at::BFloat16>()), mn,
+                            k, num_groups, alignment, stream);
+    } else {
+        HOST_ERROR("transpose_to_mn_major_into: unsupported dtype (only FP32 and BF16)");
+    }
+}
+
 }  // namespace api
 }  // namespace gdn_cuda
