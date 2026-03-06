@@ -4,6 +4,7 @@
 
 #include <apis/gdn.hpp>
 #include <apis/layout.hpp>
+#include <cmath>
 #include <jit/compiler.hpp>
 #include <jit/utils/common.hpp>
 #include <kernels/internal_api.hpp>
@@ -52,6 +53,8 @@ std::pair<at::Tensor, at::Tensor> chunked_forward(
     } else {
         aligned_dim = head_dim;
     }
+
+    printf("aligned_dim: %d\n", aligned_dim);
 
     const bool is_varlen = cu_seqlens.has_value();
     const int batch_size = is_varlen ? 1 : query.size(0);
@@ -132,7 +135,7 @@ std::pair<at::Tensor, at::Tensor> recurrent_forward(
     at::Tensor& query, at::Tensor& key, at::Tensor& value, std::optional<at::Tensor>& initial_state,
     at::Tensor& beta, at::Tensor& gate, std::optional<at::Tensor>& cu_seqlens,
     std::optional<at::Tensor>& num_accepted_tokens, InferenceMode inference_mode,
-    cudaStream_t stream, bool is_qk_norm) {
+    cudaStream_t stream, bool is_qk_norm, std::optional<float> scale) {
     const bool store_step_state = (inference_mode == InferenceMode::SpecVerify);
     const bool is_varlen = cu_seqlens.has_value();
 
@@ -189,9 +192,10 @@ std::pair<at::Tensor, at::Tensor> recurrent_forward(
 
     at::Tensor out = at::empty_like(value);
     std::optional<at::Tensor> gate_opt = gate;
+    float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(head_dim)));
     api::bf16_gdn_recurrent(query, key, value, initial_state, final_state_storage, out, gate_opt,
                             beta, "kvt", stream, cu_seqlens, num_accepted_tokens, store_step_state,
-                            is_qk_norm);
+                            is_qk_norm, resolved_scale);
 
     out = out.index({torch::indexing::Ellipsis, torch::indexing::Slice(0, head_dim)});
     final_state_storage =
@@ -239,9 +243,10 @@ void bf16_gdn_recurrent(at::Tensor& q, at::Tensor& k, at::Tensor& v,
                         const std::string& compiled_dims, cudaStream_t stream,
                         std::optional<at::Tensor>& cu_seqlens,
                         std::optional<at::Tensor>& num_accepted_tokens, bool store_step_state,
-                        bool is_qk_norm) {
+                        bool is_qk_norm, float scale) {
     api::bf16_gdn_recurrent(q, k, v, initial_state, final_state, out, gate, beta, compiled_dims,
-                            stream, cu_seqlens, num_accepted_tokens, store_step_state, is_qk_norm);
+                            stream, cu_seqlens, num_accepted_tokens, store_step_state, is_qk_norm,
+                            scale);
 }
 
 void bf16_chunked_seq_state_update(
@@ -249,6 +254,37 @@ void bf16_chunked_seq_state_update(
     at::Tensor& state, std::optional<at::Tensor>& final_state, std::optional<at::Tensor>& gate,
     const std::string& compiled_dims, cudaStream_t stream, std::optional<at::Tensor>& cu_seqlens,
     std::optional<at::Tensor>& cu_chunks, std::optional<int> total_chunks, uint32_t chunk_size) {
+    const int head_dim = u.size(-1);
+    HOST_ASSERT(head_dim > 0, "Head dimension must be greater than 0");
+    int aligned_dim;
+    if (head_dim % 64 != 0) {  // just align to 64 eleemnts for simplicity
+
+        aligned_dim = ti_align(head_dim, 64);
+        if (aligned_dim == 0) {
+            aligned_dim = 64;
+        }
+        const int padding = aligned_dim - head_dim;
+        std::vector<int64_t> padding_qkv(u.dim() * 2, 0);
+        // right pad
+        padding_qkv[1] = padding;
+
+        // we zero pad the tensors along the head dim
+        u = torch::pad(u, padding_qkv, "constant", 0);
+        w = torch::pad(w, padding_qkv, "constant", 0);
+        k = torch::pad(k, padding_qkv, "constant", 0);
+
+        if (initial_state.has_value()) {
+            std::vector<int64_t> padding_initial_state(initial_state->dim() * 2, 0);
+            padding_initial_state[1] = padding;  // right side of dim = 0
+            padding_initial_state[3] = padding;  // right side of dim = 1
+            initial_state.emplace(
+                torch::pad(initial_state.value(), padding_initial_state, "constant", 0));
+        }
+    } else {
+        aligned_dim = head_dim;
+    }
+
+    printf("aligned_dim: %d\n", aligned_dim);
     api::bf16_chunked_seq_state_update(k, u, w, initial_state, state, final_state, gate,
                                        compiled_dims, stream, cu_seqlens, cu_chunks, total_chunks,
                                        chunk_size);

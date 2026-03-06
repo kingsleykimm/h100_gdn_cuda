@@ -26,7 +26,7 @@ std::pair<at::Tensor, at::Tensor> recurrent_forward(
     at::Tensor& query, at::Tensor& key, at::Tensor& value, std::optional<at::Tensor>& initial_state,
     at::Tensor& beta, at::Tensor& gate, std::optional<at::Tensor>& cu_seqlens,
     std::optional<at::Tensor>& num_accepted_tokens, InferenceMode inference_mode,
-    cudaStream_t stream, bool is_qk_norm = false);
+    cudaStream_t stream, bool is_qk_norm = false, std::optional<float> scale = std::nullopt);
 
 std::pair<at::Tensor, at::Tensor> fused_gdn_gating(at::Tensor& A_log, at::Tensor& dt_bias,
                                                    at::Tensor& a, at::Tensor& b, bool is_var_len,
@@ -46,7 +46,7 @@ void bf16_gdn_recurrent(at::Tensor& q, at::Tensor& k, at::Tensor& v,
                         const std::string& compiled_dims, cudaStream_t stream,
                         std::optional<at::Tensor>& cu_seqlens,
                         std::optional<at::Tensor>& num_accepted_tokens,
-                        bool store_step_state = false, bool is_qk_norm = false);
+                        bool store_step_state = false, bool is_qk_norm = false, float scale = 1.0f);
 
 void bf16_chunked_seq_state_update(at::Tensor& k, at::Tensor& u, at::Tensor& w,
                                    std::optional<at::Tensor>& initial_state, at::Tensor& state,

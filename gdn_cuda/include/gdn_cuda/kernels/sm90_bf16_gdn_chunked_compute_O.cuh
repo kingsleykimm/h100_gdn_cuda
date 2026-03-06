@@ -32,9 +32,9 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
                                     CUTE_GRID_CONSTANT const cute::TmaDescriptor q_tensor_map,
                                     CUTE_GRID_CONSTANT const cute::TmaDescriptor u_tensor_map,
                                     CUTE_GRID_CONSTANT const cute::TmaDescriptor o_tensor_map,
-                                    __nv_bfloat16 *O_ptr, float *gate_ptr, uint32_t gate_stride,
-                                    int batch_size, int shape_T, int *cu_seqlens,
-                                    int chunk_indices_length, int *chunk_indices, int *cu_chunks,
+                                    __nv_bfloat16* O_ptr, float* gate_ptr, uint32_t gate_stride,
+                                    int batch_size, int shape_T, int* cu_seqlens,
+                                    int chunk_indices_length, int* chunk_indices, int* cu_chunks,
                                     float scale_factor) {
     CUTE_STATIC_ASSERT(SHAPE_V <= 256 && SHAPE_K <= 256, "Head dim too large");
     CUTE_STATIC_ASSERT(SHAPE_K == SHAPE_V, "Different K dim and V dim not supported yet");
@@ -96,52 +96,52 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
                                                  kNumStages +
                                              SMEM_O_SIZE + SMEM_GATE_SIZE;
 
-    auto sState = PatternVisitor([&](const uint32_t &stage_idx) {
-        return reinterpret_cast<__nv_bfloat16 *>(shared + stage_idx * SMEM_STATE_SIZE_PER_STAGE);
+    auto sState = PatternVisitor([&](const uint32_t& stage_idx) {
+        return reinterpret_cast<__nv_bfloat16*>(shared + stage_idx * SMEM_STATE_SIZE_PER_STAGE);
     });
 
-    auto sK = PatternVisitor([&](const uint32_t &stage_idx) {
-        return reinterpret_cast<__nv_bfloat16 *>(shared + kNumStages * SMEM_STATE_SIZE_PER_STAGE +
-                                                 stage_idx * SMEM_K_SIZE_PER_STAGE);
+    auto sK = PatternVisitor([&](const uint32_t& stage_idx) {
+        return reinterpret_cast<__nv_bfloat16*>(shared + kNumStages * SMEM_STATE_SIZE_PER_STAGE +
+                                                stage_idx * SMEM_K_SIZE_PER_STAGE);
     });
 
-    auto sU = PatternVisitor([&](const uint32_t &stage_idx) {
-        return reinterpret_cast<__nv_bfloat16 *>(
+    auto sU = PatternVisitor([&](const uint32_t& stage_idx) {
+        return reinterpret_cast<__nv_bfloat16*>(
             shared + kNumStages * (SMEM_STATE_SIZE_PER_STAGE + SMEM_K_SIZE_PER_STAGE) +
             stage_idx * SMEM_U_SIZE_PER_STAGE);
     });
 
-    auto sQ = PatternVisitor([&](const uint32_t &stage_idx) {
-        return reinterpret_cast<__nv_bfloat16 *>(
+    auto sQ = PatternVisitor([&](const uint32_t& stage_idx) {
+        return reinterpret_cast<__nv_bfloat16*>(
             shared +
             kNumStages *
                 (SMEM_STATE_SIZE_PER_STAGE + SMEM_K_SIZE_PER_STAGE + SMEM_U_SIZE_PER_STAGE) +
             stage_idx * SMEM_Q_SIZE_PER_STAGE);
     });
 
-    auto sO = reinterpret_cast<__nv_bfloat16 *>(shared +
-                                                (SMEM_STATE_SIZE_PER_STAGE + SMEM_K_SIZE_PER_STAGE +
-                                                 SMEM_U_SIZE_PER_STAGE + SMEM_Q_SIZE_PER_STAGE) *
-                                                    kNumStages);
-
-    float *s_gate;
-    if constexpr (kUseGating) {
-        s_gate = reinterpret_cast<float *>(shared +
-                                           kNumStages *
+    auto sO = reinterpret_cast<__nv_bfloat16*>(shared +
                                                (SMEM_STATE_SIZE_PER_STAGE + SMEM_K_SIZE_PER_STAGE +
-                                                SMEM_U_SIZE_PER_STAGE + SMEM_Q_SIZE_PER_STAGE) +
-                                           SMEM_O_SIZE);
+                                                SMEM_U_SIZE_PER_STAGE + SMEM_Q_SIZE_PER_STAGE) *
+                                                   kNumStages);
+
+    float* s_gate;
+    if constexpr (kUseGating) {
+        s_gate = reinterpret_cast<float*>(shared +
+                                          kNumStages *
+                                              (SMEM_STATE_SIZE_PER_STAGE + SMEM_K_SIZE_PER_STAGE +
+                                               SMEM_U_SIZE_PER_STAGE + SMEM_Q_SIZE_PER_STAGE) +
+                                          SMEM_O_SIZE);
     }
 
-    auto tma_barriers = PatternVisitor([&](const uint32_t &stage_idx) {
-        return reinterpret_cast<TMABarrier *>(shared + SMEM_BARRIER_OFFSET +
-                                              stage_idx * sizeof(TMABarrier));
+    auto tma_barriers = PatternVisitor([&](const uint32_t& stage_idx) {
+        return reinterpret_cast<TMABarrier*>(shared + SMEM_BARRIER_OFFSET +
+                                             stage_idx * sizeof(TMABarrier));
     });
 
-    auto math_barriers = PatternVisitor([&](const uint32_t &stage_idx) {
-        return reinterpret_cast<MathBarrier *>(shared + SMEM_BARRIER_OFFSET +
-                                               kNumStages * sizeof(TMABarrier) +
-                                               stage_idx * sizeof(MathBarrier));
+    auto math_barriers = PatternVisitor([&](const uint32_t& stage_idx) {
+        return reinterpret_cast<MathBarrier*>(shared + SMEM_BARRIER_OFFSET +
+                                              kNumStages * sizeof(TMABarrier) +
+                                              stage_idx * sizeof(MathBarrier));
     });
     constexpr uint32_t num_k1_blocks = SHAPE_K / BLOCK_K;
     constexpr uint32_t num_k2_blocks = kChunkShape / kChunkBlock;
@@ -443,8 +443,8 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
                     cute::warpgroup_arrive();
 #pragma unroll
                     for (int k = 0; k < kChunkBlock / PU_MMA::K; k++) {
-                        __nv_bfloat16 *shifted_QKT_accum = QKT_accum_bf16 + k * 8;
-                        uint32_t *packed_accum = reinterpret_cast<uint32_t *>(shifted_QKT_accum);
+                        __nv_bfloat16* shifted_QKT_accum = QKT_accum_bf16 + k * 8;
+                        uint32_t* packed_accum = reinterpret_cast<uint32_t*>(shifted_QKT_accum);
                         smem_u_desc.reg32_[0] =
                             smem_u_desc_lo +
                             ((k * PU_MMA::K *
@@ -499,7 +499,7 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
                     for (int val_idx = 0; val_idx < QS_MMA::kNumAccum; val_idx++) {
                         const auto [row_idx, col_idx] = get_accum_row_col(threadIdx.x, val_idx);
                         bool pred = row_idx <= seq_end_in_chunk;
-                        __nv_bfloat16 *O_offset =
+                        __nv_bfloat16* O_offset =
                             O_ptr +
                             ((global_row_offset + row_idx) * kNumVHeads + v_head_idx) * SHAPE_V +
                             v_block_idx * BLOCK_V + col_idx;

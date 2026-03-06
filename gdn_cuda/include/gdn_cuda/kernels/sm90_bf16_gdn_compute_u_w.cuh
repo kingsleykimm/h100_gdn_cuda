@@ -22,8 +22,8 @@ namespace sm90_gdn_compute_u_w_impl {
 // helper functions
 
 template <int kChunkSize = 64>
-__device__ __forceinline__ void forward_sub_warp(__nv_bfloat16 *sL, __nv_bfloat16 *beta,
-                                                 int &seq_end_in_chunk) {
+__device__ __forceinline__ void forward_sub_warp(__nv_bfloat16* sL, __nv_bfloat16* beta,
+                                                 int& seq_end_in_chunk) {
     // Only first warp participates
     // Only first warp participates
 
@@ -160,9 +160,9 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
                           CUTE_GRID_CONSTANT const cute::TmaDescriptor v_tensor_map,
                           CUTE_GRID_CONSTANT const cute::TmaDescriptor u_tensor_map,
                           CUTE_GRID_CONSTANT const cute::TmaDescriptor w_tensor_map, int batch_size,
-                          int shape_T, int chunk_indices_length, int *chunk_indices,
-                          int *cu_seqlens, __nv_bfloat16 *U_ptr, __nv_bfloat16 *W_ptr,
-                          __nv_bfloat16 *beta_ptr, float *gate_ptr, uint32_t beta_stride,
+                          int shape_T, int chunk_indices_length, int* chunk_indices,
+                          int* cu_seqlens, __nv_bfloat16* U_ptr, __nv_bfloat16* W_ptr,
+                          __nv_bfloat16* beta_ptr, float* gate_ptr, uint32_t beta_stride,
                           uint32_t gate_stride) {
     CUTE_STATIC_ASSERT(SHAPE_K > 0 && SHAPE_V > 0, "Shape K and V must be positive");
     CUTE_STATIC_ASSERT(kNumBlocks > 0, "Blocks cannot be 0");
@@ -230,23 +230,23 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
     constexpr uint32_t SMEM_BARRIER_OFFSET = SMEM_K_SIZE + SMEM_V_SIZE + SMEM_U_SIZE + SMEM_W_SIZE +
                                              SMEM_A_SIZE + SMEM_BETA_SIZE + SMEM_GATE_SIZE;
 
-    __nv_bfloat16 *sK = reinterpret_cast<__nv_bfloat16 *>(&shared);
-    __nv_bfloat16 *sV = reinterpret_cast<__nv_bfloat16 *>(shared + SMEM_K_SIZE);
-    __nv_bfloat16 *sU = reinterpret_cast<__nv_bfloat16 *>(shared + SMEM_K_SIZE + SMEM_V_SIZE);
-    __nv_bfloat16 *sW =
-        reinterpret_cast<__nv_bfloat16 *>(shared + SMEM_K_SIZE + SMEM_V_SIZE + SMEM_U_SIZE);
-    __nv_bfloat16 *sA = reinterpret_cast<__nv_bfloat16 *>(shared + SMEM_K_SIZE + SMEM_V_SIZE +
-                                                          SMEM_U_SIZE + SMEM_W_SIZE);
-    __nv_bfloat16 *sBeta = reinterpret_cast<__nv_bfloat16 *>(
+    __nv_bfloat16* sK = reinterpret_cast<__nv_bfloat16*>(&shared);
+    __nv_bfloat16* sV = reinterpret_cast<__nv_bfloat16*>(shared + SMEM_K_SIZE);
+    __nv_bfloat16* sU = reinterpret_cast<__nv_bfloat16*>(shared + SMEM_K_SIZE + SMEM_V_SIZE);
+    __nv_bfloat16* sW =
+        reinterpret_cast<__nv_bfloat16*>(shared + SMEM_K_SIZE + SMEM_V_SIZE + SMEM_U_SIZE);
+    __nv_bfloat16* sA = reinterpret_cast<__nv_bfloat16*>(shared + SMEM_K_SIZE + SMEM_V_SIZE +
+                                                         SMEM_U_SIZE + SMEM_W_SIZE);
+    __nv_bfloat16* sBeta = reinterpret_cast<__nv_bfloat16*>(
         shared + SMEM_K_SIZE + SMEM_V_SIZE + SMEM_U_SIZE + SMEM_W_SIZE + SMEM_A_SIZE);
-    float *s_gate;
+    float* s_gate;
     if constexpr (kUseGating) {
-        s_gate = reinterpret_cast<float *>(shared + SMEM_K_SIZE + SMEM_V_SIZE + SMEM_U_SIZE +
-                                           SMEM_W_SIZE + SMEM_A_SIZE + SMEM_BETA_SIZE);
+        s_gate = reinterpret_cast<float*>(shared + SMEM_K_SIZE + SMEM_V_SIZE + SMEM_U_SIZE +
+                                          SMEM_W_SIZE + SMEM_A_SIZE + SMEM_BETA_SIZE);
     }
-    TMABarrier *tma_barrier = reinterpret_cast<TMABarrier *>(shared + SMEM_BARRIER_OFFSET);
-    MathBarrier *math_barrier =
-        reinterpret_cast<MathBarrier *>(shared + SMEM_BARRIER_OFFSET + sizeof(TMABarrier));
+    TMABarrier* tma_barrier = reinterpret_cast<TMABarrier*>(shared + SMEM_BARRIER_OFFSET);
+    MathBarrier* math_barrier =
+        reinterpret_cast<MathBarrier*>(shared + SMEM_BARRIER_OFFSET + sizeof(TMABarrier));
     // in the future, this should probably be a TMA-load, but then sequence length must be the
     // unit-strided dimension
 
@@ -313,7 +313,7 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
             math_barrier->wait(phase ^ 1);
             if (warpIdx == kNumMathThreads / 32 && lane_predicate) {
                 // Load all K blocks
-                auto &barrier = tma_barrier[0];
+                auto& barrier = tma_barrier[0];
                 for (int k_block_idx = 0; k_block_idx < num_k_blocks; k_block_idx++) {
                     if constexpr (kIsVarLen) {
                         tma_copy<BLOCK_K, kChunkSize, kSwizzleKMode, __nv_bfloat16, 3>(
@@ -462,8 +462,8 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
 #pragma unroll
             for (int i = 0; i < KKTMMA::kNumAccum / 4; i++) {
                 // zero-swizzle
-                uint8_t *smem_ptr =
-                    reinterpret_cast<uint8_t *>(sA + a_row_index * kChunkSize + i * 8);
+                uint8_t* smem_ptr =
+                    reinterpret_cast<uint8_t*>(sA + a_row_index * kChunkSize + i * 8);
                 // Each iteration stores 4 consecutive fp32 accumulators as 4 bf16 values
                 // Scalar stores in row-major layout: sA[row * kChunkSize + col]
                 custom_SM90_U32x2_STSM_N<__nv_bfloat162>::copy(
@@ -524,7 +524,7 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
                         sK + k_block_idx * kChunkSize * BLOCK_K);
                 const uint32_t smem_k_desc_mn_base =
                     __shfl_sync(uint32_t(-1), smem_k_desc_mn.reg32_[0], 0);
-                float *shifted_accum = w_accum + k_block_idx * WMMA::kNumAccum;
+                float* shifted_accum = w_accum + k_block_idx * WMMA::kNumAccum;
 
 #pragma unroll
                 for (int i = 0; i < WMMA::kNumAccum; i++) {
@@ -562,7 +562,7 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
             if constexpr (kUseGating) {
 #pragma unroll
                 for (int k_block_idx = 0; k_block_idx < num_k_blocks; k_block_idx++) {
-                    float *shifted_w_accum = w_accum + k_block_idx * WMMA::kNumAccum;
+                    float* shifted_w_accum = w_accum + k_block_idx * WMMA::kNumAccum;
 #pragma unroll
                     for (int i = 0; i < WMMA::kNumAccum; i++) {
                         auto [row, col] = get_accum_row_col(threadIdx.x, i);
@@ -585,7 +585,7 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
             constexpr uint32_t W_WGMMA_M_PER_WARP = WMMA::M / 4;
 #pragma unroll
             for (int k_block_idx = 0; k_block_idx < num_k_blocks; k_block_idx++) {
-                float *shifted_w_accum = w_accum + k_block_idx * WMMA::kNumAccum;
+                float* shifted_w_accum = w_accum + k_block_idx * WMMA::kNumAccum;
                 store_accum_to_swizzled_smem<BLOCK_K, kChunkSize, kSwizzleKMode,
                                              W_WGMMA_M_PER_WARP>(
                     shifted_w_accum, sW + k_block_idx * kChunkSize * BLOCK_K, warpIdx, lane_idx);
@@ -597,7 +597,7 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
                     for (int val_idx = 0; val_idx < UMMA::kNumAccum; val_idx++) {
                         const auto [row_idx, col_idx] = get_accum_row_col(threadIdx.x, val_idx);
                         bool pred = row_idx <= seq_end_in_chunk;
-                        __nv_bfloat16 *U_offset =
+                        __nv_bfloat16* U_offset =
                             U_ptr +
                             ((global_row_offset + row_idx) * kNumVHeads + head_idx) * SHAPE_V +
                             col_idx;
@@ -627,12 +627,12 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
 #pragma unroll
                     for (int k_block_idx = 0; k_block_idx < num_k_blocks; k_block_idx++) {
                         auto n_chunk_offset = k_block_idx * BLOCK_K;
-                        float *shifted_w_accum = w_accum + k_block_idx * WMMA::kNumAccum;
+                        float* shifted_w_accum = w_accum + k_block_idx * WMMA::kNumAccum;
 #pragma unroll
                         for (int val_idx = 0; val_idx < WMMA::kNumAccum; val_idx++) {
                             const auto [row_idx, col_idx] = get_accum_row_col(threadIdx.x, val_idx);
                             bool pred = row_idx <= seq_end_in_chunk;
-                            __nv_bfloat16 *W_offset =
+                            __nv_bfloat16* W_offset =
                                 W_ptr +
                                 ((global_row_offset + row_idx) * kNumVHeads + head_idx) * SHAPE_V +
                                 n_chunk_offset + col_idx;

@@ -473,7 +473,7 @@ __global__ void __launch_bounds__(kNumMathThreads + kNumTMAThreads, 1)
                     load_swizzled_smem_to_accum<SHAPE_K, kChunkSize, kSwizzleKMode,
                                                 WGMMA_M_PER_WARP>(sK, sK_accum, warpIdx, lane_idx);
 #pragma unroll
-                    for (int val_idx = 0; val_idx < SHAPE_K / 8; val_idx++) {
+                    for (int val_idx = 0; val_idx < SHAPE_K / 2; val_idx++) {
                         const auto [row_idx, col_idx] = get_accum_row_col(threadIdx.x, val_idx);
                         bool pred = global_row_offset + row_idx < seq_end;
                         if (!pred) {

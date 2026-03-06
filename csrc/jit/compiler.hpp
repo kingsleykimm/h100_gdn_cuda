@@ -153,12 +153,24 @@ class NVCC_Compiler : public Compiler {
 class NVRTCCompiler final : public Compiler {
    public:
     NVRTCCompiler() {
+        // Derive the NVRTC version from the CUDA toolkit (nvcc --version) rather
+        // than nvrtcVersion(), because when running inside Python, PyTorch may
+        // have already loaded its own bundled libnvrtc.so and the host-side
+        // nvrtcVersion() symbol resolves to that older version.
         int major, minor;
-        NVRTC_CHECK(nvrtcVersion(&major, &minor));
+        {
+            auto nvcc_path = cuda_home / "bin" / "nvcc";
+            auto version_cmd = fmt::format("{} --version", nvcc_path.string());
+            auto [exitcode, output] = run_command(version_cmd);
+            HOST_ASSERT(exitcode == 0, "Error when fetching the nvcc version for NVRTC");
+            std::smatch match;
+            HOST_ASSERT(std::regex_search(output, match, std::regex(R"(release (\d+\.\d+))")),
+                        "No CUDA version found from nvcc");
+            std::sscanf(match[1].str().c_str(), "%d.%d", &major, &minor);
+        }
         signature = fmt::format("NVRTC{}.{}", major, minor);
-
         if (get_env<int>("JIT_DEBUG", 0)) {
-            printf("NVRTC version: %d.%d\n", major, minor);
+            printf("NVRTC version (from toolkit): %d.%d\n", major, minor);
         }
         HOST_ASSERT((major > 12) || (major == 12 && minor >= 3),
                     "NVRTC version must be at least 12.3");

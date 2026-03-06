@@ -108,16 +108,18 @@ Notes:
         "recurrent_forward",
         [](at::Tensor& q, at::Tensor& k, at::Tensor& v, std::optional<at::Tensor> initial_state,
            at::Tensor& beta, at::Tensor& gate, std::optional<at::Tensor> cu_seqlens,
-           std::optional<at::Tensor> num_accepted_tokens, int inference_mode, bool is_qk_norm) {
+           std::optional<at::Tensor> num_accepted_tokens, int inference_mode, bool is_qk_norm,
+           std::optional<float> scale) {
             cudaStream_t stream = current_stream();
             gdn_cuda::InferenceMode mode = static_cast<gdn_cuda::InferenceMode>(inference_mode);
             return gdn_cuda::recurrent_forward(q, k, v, initial_state, beta, gate, cu_seqlens,
-                                               num_accepted_tokens, mode, stream, is_qk_norm);
+                                               num_accepted_tokens, mode, stream, is_qk_norm,
+                                               scale);
         },
         py::arg("query"), py::arg("key"), py::arg("value"), py::arg("initial_state") = py::none(),
         py::arg("beta"), py::arg("gate"), py::arg("cu_seqlens") = py::none(),
         py::arg("num_accepted_tokens") = py::none(), py::arg("inference_mode") = 0,
-        py::arg("is_qk_norm") = false,
+        py::arg("is_qk_norm") = false, py::arg("scale") = py::none(),
         R"(Recurrent decode/spec-verify forward pass.
 
 Args:
@@ -131,6 +133,7 @@ Args:
     num_accepted_tokens: Optional accepted token counts for speculative decode modes.
     inference_mode: Integer enum value from InferenceMode.
     is_qk_norm: Whether to enable QK normalization path.
+    scale: Optional output scale factor. Defaults to 1/sqrt(head_dim) when None.
 
 Shapes:
     padded:

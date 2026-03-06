@@ -26,9 +26,9 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
     const CUTE_GRID_CONSTANT cute::TmaDescriptor k_tensor_map,
     const CUTE_GRID_CONSTANT cute::TmaDescriptor v_tensor_map,
     const CUTE_GRID_CONSTANT cute::TmaDescriptor state_tensor_map,
-    const CUTE_GRID_CONSTANT cute::TmaDescriptor final_state_tensor_map, __nv_bfloat16 *out,
-    const __nv_bfloat16 *beta_ptr, __nv_bfloat16 *g_ptr, int *num_accepted_tokens_ptr,
-    int batch_size, int shape_k, int shape_v, int *cu_seqlens) {
+    const CUTE_GRID_CONSTANT cute::TmaDescriptor final_state_tensor_map, __nv_bfloat16* out,
+    const __nv_bfloat16* beta_ptr, __nv_bfloat16* g_ptr, int* num_accepted_tokens_ptr,
+    int batch_size, int shape_k, int shape_v, int* cu_seqlens, float scale) {
     CUTE_STATIC_ASSERT(BLOCK_V >= 64, "BLOCK_V >= 64 In order for TMA-aligned loads");
     CUTE_STATIC_ASSERT(kNumBlocks % kNumTMAMulticast == 0,
                        "kNumBlocks must be divisible by kNumTMAMulticast");
@@ -67,18 +67,18 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
     constexpr uint32_t SMEM_HIDDEN_SIZE =
         constexpr_ti_align(sizeof(__nv_bfloat16) * SHAPE_K * BLOCK_V, 128);
 
-    __nv_bfloat16 *state = reinterpret_cast<__nv_bfloat16 *>(&shared);
-    __nv_bfloat16 *query = reinterpret_cast<__nv_bfloat16 *>(shared + SMEM_HIDDEN_SIZE);
+    __nv_bfloat16* state = reinterpret_cast<__nv_bfloat16*>(&shared);
+    __nv_bfloat16* query = reinterpret_cast<__nv_bfloat16*>(shared + SMEM_HIDDEN_SIZE);
 
-    __nv_bfloat16 *key = reinterpret_cast<__nv_bfloat16 *>(shared + SMEM_HIDDEN_SIZE + SMEM_Q_SIZE);
-    __nv_bfloat16 *value =
-        reinterpret_cast<__nv_bfloat16 *>(shared + SMEM_HIDDEN_SIZE + SMEM_Q_SIZE + SMEM_K_SIZE);
+    __nv_bfloat16* key = reinterpret_cast<__nv_bfloat16*>(shared + SMEM_HIDDEN_SIZE + SMEM_Q_SIZE);
+    __nv_bfloat16* value =
+        reinterpret_cast<__nv_bfloat16*>(shared + SMEM_HIDDEN_SIZE + SMEM_Q_SIZE + SMEM_K_SIZE);
     // barriers
     using MathBarrier = cutlass::arch::ClusterBarrier;
     using TMABarrier = cutlass::arch::ClusterTransactionBarrier;
-    TMABarrier *tma_barrier = reinterpret_cast<TMABarrier *>(
+    TMABarrier* tma_barrier = reinterpret_cast<TMABarrier*>(
         shared + SMEM_HIDDEN_SIZE + SMEM_K_SIZE + SMEM_Q_SIZE + SMEM_V_SIZE);
-    MathBarrier *math_barrier = reinterpret_cast<MathBarrier *>(
+    MathBarrier* math_barrier = reinterpret_cast<MathBarrier*>(
         shared + SMEM_HIDDEN_SIZE + SMEM_K_SIZE + SMEM_Q_SIZE + SMEM_V_SIZE + sizeof(TMABarrier));
     // overlap tma loads with other calculations
     constexpr uint32_t kFirstIterTMABytes =
@@ -135,7 +135,7 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
                     // math_barrier->wait(tma_state.phase());
                     math_barrier[0].wait(phase ^ 1);
 
-                    auto &barrier = tma_barrier[0];
+                    auto& barrier = tma_barrier[0];
 
                     // note make sure to include multicast here
 
@@ -241,7 +241,7 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
 #pragma unroll
                         for (int row_offset = 0; row_offset < numRowsPerWarp; row_offset++) {
                             int row = warpIdx + row_offset * kNumMathWarps;
-                            float *shifted_state = state_regs + SHAPE_K / 32 * row_offset;
+                            float* shifted_state = state_regs + SHAPE_K / 32 * row_offset;
 
 #pragma unroll
                             for (int col = lane_idx * kNumVec; col < SHAPE_K;
@@ -249,9 +249,9 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
                                 // No swizzle - use simple linear indexing
                                 uint32_t offset = row * SHAPE_K + col;
                                 vec_load_ptr state_load =
-                                    ld_shared(reinterpret_cast<vec_load_ptr *>(state + offset));
-                                __nv_bfloat16 *state_bf16 =
-                                    reinterpret_cast<__nv_bfloat16 *>(&state_load);
+                                    ld_shared(reinterpret_cast<vec_load_ptr*>(state + offset));
+                                __nv_bfloat16* state_bf16 =
+                                    reinterpret_cast<__nv_bfloat16*>(&state_load);
 #pragma unroll
                                 for (int j = 0; j < kNumVec; j++) {
                                     shifted_state[j] = __bfloat162float(state_bf16[j]);
@@ -271,15 +271,14 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
 #pragma unroll
                 for (int row_offset = 0; row_offset < numRowsPerWarp; row_offset++) {
                     int row = warpIdx + row_offset * kNumMathWarps;
-                    float *shifted_state = state_regs + SHAPE_K / 32 * row_offset;
-                    float *shifted_key = key_regs;
+                    float* shifted_state = state_regs + SHAPE_K / 32 * row_offset;
+                    float* shifted_key = key_regs;
                     float accum = 0;
                     float k2_sum = 0;
 #pragma unroll
                     for (int col = lane_idx * kNumVec; col < SHAPE_K; col += threadLoadSize) {
-                        vec_load_ptr k_load =
-                            ld_shared(reinterpret_cast<vec_load_ptr *>(key + col));
-                        __nv_bfloat16 *k_bf16 = reinterpret_cast<__nv_bfloat16 *>(&k_load);
+                        vec_load_ptr k_load = ld_shared(reinterpret_cast<vec_load_ptr*>(key + col));
+                        __nv_bfloat16* k_bf16 = reinterpret_cast<__nv_bfloat16*>(&k_load);
 
 #pragma unroll
                         for (int j = 0; j < kNumVec; j++) {
@@ -312,7 +311,7 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
 #pragma unroll
                         for (int j = 0; j < kNumVec; j++) {
                             if constexpr (kUseGate) {
-                                shifted_state[j] *= __bfloat162float(g);
+                                shifted_state[j] *= __expf(__bfloat162float(g));
                             }
                             shifted_state[j] -=
                                 __bfloat162float(beta) * row_val * shifted_key[j] * inv_k2_norm;
@@ -331,8 +330,8 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
 #pragma unroll
                     for (int col = lane_idx * kNumVec; col < SHAPE_K; col += threadLoadSize) {
                         vec_load_ptr q_load =
-                            ld_shared(reinterpret_cast<vec_load_ptr *>(query + col));
-                        __nv_bfloat16 *q_bf16 = reinterpret_cast<__nv_bfloat16 *>(&q_load);
+                            ld_shared(reinterpret_cast<vec_load_ptr*>(query + col));
+                        __nv_bfloat16* q_bf16 = reinterpret_cast<__nv_bfloat16*>(&q_load);
 #pragma unroll
                         for (int j = 0; j < kNumVec; j++) {
                             float q_val = __bfloat162float(q_bf16[j]);
@@ -349,7 +348,7 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
                     }
 
                     float inv_q2_norm = kIsQKNorm ? rsqrt(q2_sum + 1e-6f) : 1.0f;
-                    Sq_accum *= inv_q2_norm;
+                    Sq_accum *= inv_q2_norm * scale;
                     __nv_bfloat16 Sq_accum_bf16 = __float2bfloat16(Sq_accum);
 
                     if (lane_predicate) {
@@ -378,7 +377,7 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
 #pragma unroll
                     for (int row_offset = 0; row_offset < numRowsPerWarp; row_offset++) {
                         int row = warpIdx + row_offset * kNumMathWarps;
-                        float *shifted_state = state_regs + SHAPE_K / 32 * row_offset;
+                        float* shifted_state = state_regs + SHAPE_K / 32 * row_offset;
 #pragma unroll
                         for (int col = lane_idx * kNumVec; col < SHAPE_K; col += threadLoadSize) {
                             uint32_t offset = row * SHAPE_K + col;
@@ -387,8 +386,8 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
                             for (int j = 0; j < kNumVec; j++) {
                                 state_bf16[j] = __float2bfloat16(shifted_state[j]);
                             }
-                            st_shared(reinterpret_cast<const vec_load_ptr *>(state + offset),
-                                      *reinterpret_cast<vec_load_ptr *>(&state_bf16[0]));
+                            st_shared(reinterpret_cast<const vec_load_ptr*>(state + offset),
+                                      *reinterpret_cast<vec_load_ptr*>(&state_bf16[0]));
                         }
                     }
                     cute::tma_store_fence();
@@ -406,7 +405,7 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
 #pragma unroll
                 for (int row_offset = 0; row_offset < numRowsPerWarp; row_offset++) {
                     int row = warpIdx + row_offset * kNumMathWarps;
-                    float *shifted_state = state_regs + SHAPE_K / 32 * row_offset;
+                    float* shifted_state = state_regs + SHAPE_K / 32 * row_offset;
 #pragma unroll
                     for (int col = lane_idx * kNumVec; col < SHAPE_K; col += threadLoadSize) {
                         uint32_t offset = row * SHAPE_K + col;
@@ -415,8 +414,8 @@ __global__ void fused_recurrent_gated_delta_rule_bf16(
                         for (int j = 0; j < kNumVec; j++) {
                             state_bf16[j] = __float2bfloat16(shifted_state[j]);
                         }
-                        st_shared(reinterpret_cast<const vec_load_ptr *>(state + offset),
-                                  *reinterpret_cast<vec_load_ptr *>(&state_bf16[0]));
+                        st_shared(reinterpret_cast<const vec_load_ptr*>(state + offset),
+                                  *reinterpret_cast<vec_load_ptr*>(&state_bf16[0]));
                     }
                 }
                 cute::tma_store_fence();

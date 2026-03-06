@@ -53,6 +53,7 @@ class SM90_BF16_GDN_Recurrent_Runtime : public LaunchRuntime<SM90_BF16_GDN_Recur
         int* num_accepted_tokens;
         int batch_size;
         int* cu_seqlens;
+        float scale;
 
         // JIT compile settings
         std::string compiled_dims;
@@ -106,7 +107,7 @@ extern "C" __attribute__((used)) GdnRecurrentKernelPtr __gdn_recurrent_kernel_re
             kernel, launch_config, args.q_tensor_map, args.k_tensor_map, args.v_tensor_map,
             args.state_tensor_map, args.final_state_tensor_map, args.out, args.beta, args.gate,
             args.num_accepted_tokens, args.batch_size, static_cast<int>(args.shape_k),
-            static_cast<int>(args.shape_v), args.cu_seqlens));
+            static_cast<int>(args.shape_v), args.cu_seqlens, args.scale));
     }
 };
 
@@ -123,7 +124,7 @@ inline void sm90_bf16_gdn_recurrent(
     std::optional<at::Tensor>& gate,  // [batch, seq_len, num_v_heads] gating values
     at::Tensor& beta, const std::string& compiled_dims, cudaStream_t stream,
     std::optional<at::Tensor>& cu_seqlens, std::optional<at::Tensor>& num_accepted_tokens,
-    bool store_step_state = false, bool is_qk_norm = false) {
+    bool store_step_state = false, bool is_qk_norm = false, float scale = 1.0f) {
     bool is_var_len = cu_seqlens.has_value();
     bool is_initial_state = initial_state.has_value();
     if (is_var_len) {
@@ -219,6 +220,7 @@ inline void sm90_bf16_gdn_recurrent(
             num_accepted_tokens.has_value() ? num_accepted_tokens->data_ptr<int>() : nullptr;
         args.batch_size = static_cast<int>(batch_size);
         args.cu_seqlens = d_cu_seqlens;
+        args.scale = scale;
         args.compiled_dims = compiled_dims;
         args.launch_config = launch_config;
 
@@ -323,6 +325,7 @@ inline void sm90_bf16_gdn_recurrent(
             num_accepted_tokens.has_value() ? num_accepted_tokens->data_ptr<int>() : nullptr;
         args.batch_size = static_cast<int>(batch_size);
         args.cu_seqlens = nullptr;
+        args.scale = scale;
         args.compiled_dims = compiled_dims;
         args.launch_config = launch_config;
 

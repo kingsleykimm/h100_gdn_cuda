@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -137,7 +138,8 @@ torch::Tensor gdn_recurrent_reference_padded(
     const torch::Tensor& init_state,  // (batch, num_v_heads, shape_v, shape_k) - read only
     torch::Tensor& final_state,       // output: (batch, ...) or (batch*seq_len, ...)
     const torch::Tensor& beta,        // (batch, seq_len, num_v_heads)
-    bool is_qk_norm, bool store_step_state = false) {
+    bool is_qk_norm, float scale = 1.0f, bool store_step_state = false,
+    const std::optional<torch::Tensor>& gate = std::nullopt) {
     auto options = Q.options().dtype(torch::kFloat32);
 
     int64_t batch_size = Q.size(0);
@@ -156,6 +158,8 @@ torch::Tensor gdn_recurrent_reference_padded(
     auto V_f = V.to(torch::kFloat32);
     auto init_state_f = init_state.to(torch::kFloat32);
     auto beta_f = beta.to(torch::kFloat32);
+    auto gate_f = gate.has_value() ? std::optional<torch::Tensor>(gate.value().to(torch::kFloat32))
+                                   : std::nullopt;
     auto final_state_f = final_state.to(torch::kFloat32);
 
     for (int64_t b = 0; b < batch_size; b++) {
@@ -172,6 +176,11 @@ torch::Tensor gdn_recurrent_reference_padded(
                 auto k = K_f[b][t][k_head];  // (shape_k,)
                 auto v = V_f[b][t][h];       // (shape_v,)
                 float beta_t = beta_f[b][t][h].item<float>();
+                if (gate_f.has_value()) {
+                    float g_t = gate_f.value()[b][t][h].item<float>();
+                    float gate_mult = std::exp(g_t);
+                    S = S * gate_mult;
+                }
 
                 // Compute k norm for normalization
                 float k_norm_sq = torch::dot(k, k).item<float>();
@@ -191,7 +200,7 @@ torch::Tensor gdn_recurrent_reference_padded(
                 float q_norm_sq = torch::dot(q, q).item<float>();
                 float inv_q_norm = is_qk_norm ? (1.0f / std::sqrt(q_norm_sq + 1e-6f)) : 1.0f;
 
-                auto out = torch::mv(S, q) * inv_q_norm;  // (shape_v,)
+                auto out = torch::mv(S, q) * (inv_q_norm * scale);  // (shape_v,)
                 output[b][t][h] = out;
 
                 // Store step state if requested
@@ -224,9 +233,9 @@ torch::Tensor gdn_recurrent_reference_varlen(
     const torch::Tensor& init_state,  // (batch_size, num_v_heads, shape_v, shape_k) - read only
     torch::Tensor& final_state,       // output: (batch, ...) or (total_tokens, ...)
     const torch::Tensor& beta,        // (total_tokens, num_v_heads)
-    bool is_qk_norm,
+    bool is_qk_norm, float scale,
     const std::vector<int>& cu_seqlens,  // cumulative sequence lengths
-    bool store_step_state = false) {
+    bool store_step_state = false, const std::optional<torch::Tensor>& gate = std::nullopt) {
     auto options = Q.options().dtype(torch::kFloat32);
 
     int64_t total_tokens = Q.size(0);
@@ -245,6 +254,8 @@ torch::Tensor gdn_recurrent_reference_varlen(
     auto V_f = V.to(torch::kFloat32);
     auto init_state_f = init_state.to(torch::kFloat32);
     auto beta_f = beta.to(torch::kFloat32);
+    auto gate_f = gate.has_value() ? std::optional<torch::Tensor>(gate.value().to(torch::kFloat32))
+                                   : std::nullopt;
     auto final_state_f = final_state.to(torch::kFloat32);
 
     for (int64_t b = 0; b < batch_size; b++) {
@@ -267,6 +278,11 @@ torch::Tensor gdn_recurrent_reference_varlen(
                 auto k = K_f[token_idx][k_head];  // (shape_k,)
                 auto v = V_f[token_idx][h];       // (shape_v,)
                 float beta_t = beta_f[token_idx][h].item<float>();
+                if (gate_f.has_value()) {
+                    float g_t = gate_f.value()[token_idx][h].item<float>();
+                    float gate_mult = std::exp(g_t);
+                    S = S * gate_mult;
+                }
 
                 // Compute k norm for normalization
                 float k_norm_sq = torch::dot(k, k).item<float>();
@@ -286,7 +302,7 @@ torch::Tensor gdn_recurrent_reference_varlen(
                 float q_norm_sq = torch::dot(q, q).item<float>();
                 float inv_q_norm = is_qk_norm ? (1.0f / std::sqrt(q_norm_sq + 1e-6f)) : 1.0f;
 
-                auto out = torch::mv(S, q) * inv_q_norm;  // (shape_v,)
+                auto out = torch::mv(S, q) * (inv_q_norm * scale);  // (shape_v,)
                 output[token_idx][h] = out;
 
                 // Store step state if requested
@@ -312,16 +328,18 @@ torch::Tensor gdn_recurrent_reference_varlen(
 torch::Tensor gdn_recurrent_reference(const torch::Tensor& Q, const torch::Tensor& K,
                                       const torch::Tensor& V, const torch::Tensor& init_state,
                                       torch::Tensor& final_state, const torch::Tensor& beta,
-                                      bool is_qk_norm, const std::vector<int>& cu_seqlens = {},
-                                      bool store_step_state = false) {
+                                      bool is_qk_norm, float scale = 1.0f,
+                                      const std::vector<int>& cu_seqlens = {},
+                                      bool store_step_state = false,
+                                      const std::optional<torch::Tensor>& gate = std::nullopt) {
     bool is_varlen = !cu_seqlens.empty();
 
     if (is_varlen) {
         return gdn_recurrent_reference_varlen(Q, K, V, init_state, final_state, beta, is_qk_norm,
-                                              cu_seqlens, store_step_state);
+                                              scale, cu_seqlens, store_step_state, gate);
     } else {
         return gdn_recurrent_reference_padded(Q, K, V, init_state, final_state, beta, is_qk_norm,
-                                              store_step_state);
+                                              scale, store_step_state, gate);
     }
 }
 
@@ -371,6 +389,17 @@ bool test_padded_mode(const GDNTestShape& shape, const TestConfig& config) {
         torch::normal(0.0f, 1.0f, {shape.batch_size, shape.seq_len, shape.num_v_heads},
                       std::nullopt, bf16_opts) *
         0.1f;
+    torch::TensorOptions f32_opts = torch::TensorOptions().dtype(torch::kFloat32).device(device);
+    std::optional<torch::Tensor> gate_log_ref_opt = std::nullopt;
+    std::optional<at::Tensor> gate_opt = std::nullopt;
+    if (config.test_gate) {
+        // Both reference and kernel consume log-gate and apply exp(g) internally.
+        torch::Tensor gate_log = torch::log(torch::sigmoid(
+            torch::rand({shape.batch_size, shape.seq_len, shape.num_v_heads}, f32_opts)));
+        torch::Tensor gate_log_bf16 = gate_log.to(torch::kBFloat16);
+        gate_log_ref_opt.emplace(gate_log);
+        gate_opt.emplace(gate_log_bf16);
+    }
 
     // Output tensor: (batch, seq_len, num_v_heads, shape_v) - one output per token
     torch::Tensor out = torch::zeros(
@@ -384,12 +413,22 @@ bool test_padded_mode(const GDNTestShape& shape, const TestConfig& config) {
         std::cout << "Final state shape: " << shape_to_string(final_state_kernel.sizes().vec())
                   << "\n";
         std::cout << "Beta shape: " << shape_to_string(beta.sizes().vec()) << "\n";
+        if (gate_log_ref_opt.has_value()) {
+            std::cout << "Gate (reference log-g) shape: "
+                      << shape_to_string(gate_log_ref_opt->sizes().vec()) << "\n";
+            std::cout << "Gate (kernel log-g) shape: " << shape_to_string(gate_opt->sizes().vec())
+                      << "\n";
+        }
         std::cout << "Output shape: " << shape_to_string(out.sizes().vec()) << "\n";
     }
 
+    // Compute scale factor: 1/sqrt(shape_k), matching FLA convention
+    float scale = 1.0f / std::sqrt(static_cast<float>(shape.shape_k));
+
     // Compute reference
-    auto ref_output = gdn_recurrent_reference(Q, K, V, init_state, final_state_ref, beta,
-                                              config.test_qk_norm, {}, config.test_step_state);
+    auto ref_output =
+        gdn_recurrent_reference(Q, K, V, init_state, final_state_ref, beta, config.test_qk_norm,
+                                scale, {}, config.test_step_state, gate_log_ref_opt);
 
     // Create custom tensors
     at::Tensor q_custom = (Q);
@@ -406,7 +445,6 @@ bool test_padded_mode(const GDNTestShape& shape, const TestConfig& config) {
     // Run kernel
     auto start = std::chrono::high_resolution_clock::now();
     std::optional<at::Tensor> cu_seqlens_opt = std::nullopt;           // empty for padded
-    std::optional<at::Tensor> gate_opt = std::nullopt;                 // no gate for now
     std::optional<at::Tensor> num_accepted_tokens_opt = std::nullopt;  // not used in this test
 
     printf("beginning kernel execution\n");
@@ -414,7 +452,7 @@ bool test_padded_mode(const GDNTestShape& shape, const TestConfig& config) {
                                  final_state_custom, out_custom, gate_opt, beta_custom,
                                  "kvt",  // compiled_dims
                                  stream, cu_seqlens_opt, num_accepted_tokens_opt,
-                                 config.test_step_state, config.test_qk_norm);
+                                 config.test_step_state, config.test_qk_norm, scale);
 
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -558,6 +596,17 @@ bool test_varlen_mode(const VarlenTestShape& shape, const TestConfig& config) {
     torch::Tensor beta =
         torch::normal(0.0f, 1.0f, {total_tokens, shape.num_v_heads}, std::nullopt, bf16_opts) *
         0.1f;
+    torch::TensorOptions f32_opts = torch::TensorOptions().dtype(torch::kFloat32).device(device);
+    std::optional<torch::Tensor> gate_log_ref_opt = std::nullopt;
+    std::optional<at::Tensor> gate_opt = std::nullopt;
+    if (config.test_gate) {
+        // Both reference and kernel consume log-gate and apply exp(g) internally.
+        torch::Tensor gate_log =
+            torch::log(torch::sigmoid(torch::rand({total_tokens, shape.num_v_heads}, f32_opts)));
+        torch::Tensor gate_log_bf16 = gate_log.to(torch::kBFloat16);
+        gate_log_ref_opt.emplace(gate_log);
+        gate_opt.emplace(gate_log_bf16);
+    }
 
     // Output tensor: (total_tokens, num_v_heads, shape_v) - one output per token
     torch::Tensor out = torch::zeros({total_tokens, shape.num_v_heads, shape.shape_v}, bf16_opts);
@@ -570,13 +619,22 @@ bool test_varlen_mode(const VarlenTestShape& shape, const TestConfig& config) {
         std::cout << "Final state shape: " << shape_to_string(final_state_kernel.sizes().vec())
                   << "\n";
         std::cout << "Beta shape: " << shape_to_string(beta.sizes().vec()) << "\n";
+        if (gate_log_ref_opt.has_value()) {
+            std::cout << "Gate (reference log-g) shape: "
+                      << shape_to_string(gate_log_ref_opt->sizes().vec()) << "\n";
+            std::cout << "Gate (kernel log-g) shape: " << shape_to_string(gate_opt->sizes().vec())
+                      << "\n";
+        }
         std::cout << "Output shape: " << shape_to_string(out.sizes().vec()) << "\n";
     }
+
+    // Compute scale factor: 1/sqrt(shape_k), matching FLA convention
+    float scale = 1.0f / std::sqrt(static_cast<float>(shape.shape_k));
 
     // Compute reference
     auto ref_output =
         gdn_recurrent_reference(Q, K, V, init_state, final_state_ref, beta, config.test_qk_norm,
-                                cu_seqlens, config.test_step_state);
+                                scale, cu_seqlens, config.test_step_state, gate_log_ref_opt);
 
     // Create custom tensors
     at::Tensor q_custom = (Q);
@@ -603,14 +661,13 @@ bool test_varlen_mode(const VarlenTestShape& shape, const TestConfig& config) {
 
     cu_seqlens_opt.emplace(std::move(cu_seqlens_custom));
 
-    std::optional<at::Tensor> gate_opt = std::nullopt;                 // no gate for now
     std::optional<at::Tensor> num_accepted_tokens_opt = std::nullopt;  // not used in this test
 
     gdn_cuda::bf16_gdn_recurrent(q_custom, k_custom, v_custom, init_state_custom_opt,
                                  final_state_custom, out_custom, gate_opt, beta_custom,
                                  "kv",  // compiled_dims
                                  stream, cu_seqlens_opt, num_accepted_tokens_opt,
-                                 config.test_step_state, config.test_qk_norm);
+                                 config.test_step_state, config.test_qk_norm, scale);
 
     CUDA_CHECK(cudaStreamSynchronize(stream));
     auto end = std::chrono::high_resolution_clock::now();
